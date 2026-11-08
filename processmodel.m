@@ -59,6 +59,9 @@ function processmodel(pm)
         maTask = pm.addTask(padv.builtin.task.RunModelStandards(IterationQuery=findModels));
         maTask.ReportPath = fullfile( ...
             defaultResultPath,'model_standards_results');
+        % 검사 목록: checks/model_standards.json (기본 목록에서 R2026b에 없는 hisl_0311을 뺀 것)
+        maTask.addInputQueries(padv.builtin.query.FindFileWithAddress( ...
+            Type='ma_config_file', Path=fullfile('checks','model_standards.json')));
     end
 
     %% Detect design errors
