@@ -20,6 +20,10 @@ function make_unit_cases(xlsx, mldatx, opts)
 %   그래서 엑셀에 시트를 추가하고 다시 실행하면 새 케이스만 추가된다.
 % - 새 케이스마다
 %     입력      : 그 시트의 Input 열 (열 이름 = 입력포트 이름으로 연결)
+%                 시트에 Input 열이 없으면 <엑셀 이름>_inputs/<시트 이름>.mat (영상처럼 엑셀에 담을 수 없는 입력)
+%                 MAT 파일에는 Dataset 변수 하나, 원소 이름 = 입력포트 이름
+%                 예) tests/unit_recognize.xlsx 시트 SWR01_class_of_each_sign
+%                     -> tests/unit_recognize_inputs/SWR01_class_of_each_sign.mat (원소 rgb)
 %     기대값    : 그 시트의 Output 열 (Baseline)
 %     정지 시간 : 그 시트의 마지막 time
 % - 요구사항 Verify 링크 (새 케이스와 이미 있는 케이스 모두, 이미 걸린 링크는 다시 걸지 않음)
@@ -89,8 +93,13 @@ for k = 1:numel(sheets)
     tc = createTestCase(ts, 'baseline', name);
     setProperty(tc, 'Model', model);
 
-    in = addInput(tc, xlsx, 'Sheets', name, 'CreateIterations', false);
-    map(in, 0);   % 0: 입력 열 이름과 입력포트 이름(Block Name)으로 연결
+    matIn = inputMatFile(xlsx, name);
+    if isempty(matIn)
+        in = addInput(tc, xlsx, 'Sheets', name, 'CreateIterations', false);
+    else
+        in = addInput(tc, matIn, 'CreateIterations', false);   % 엑셀에 담을 수 없는 입력 (영상 등)
+    end
+    map(in, 0);   % 0: 입력 신호 이름과 입력포트 이름(Block Name)으로 연결
 
     addBaselineCriteria(tc, xlsx, 'Sheets', name);
 
@@ -156,6 +165,20 @@ lnk = slreq.createLink(tc, req);
 lnk.Type = 'Verify';
 fprintf('링크: %s -> %s\n', tc.Name, reqId);
 n = 1;
+end
+
+function matIn = inputMatFile(xlsx, sheet)
+% 시트에 입력 열('Source: Input')이 없으면 <엑셀 이름>_inputs/<시트>.mat을 입력으로 씀. 입력 열이 있으면 ''
+c = readcell(xlsx, 'Sheet', sheet, 'Range', '2:2');
+c = c(cellfun(@(x) ischar(x) || isstring(x), c));
+if any(strcmp(string(c), 'Source: Input'))
+    matIn = '';
+    return
+end
+[d, base] = fileparts(xlsx);
+matIn = fullfile(d, [base '_inputs'], [sheet '.mat']);
+assert(isfile(matIn), 'make_unit_cases:noInput', ...
+    '시트 %s에 입력 열이 없고 입력 MAT 파일도 없습니다: %s', sheet, matIn);
 end
 
 function t = readLinkTable(xlsx, allSheets)
