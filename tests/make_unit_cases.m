@@ -32,6 +32,8 @@ function make_unit_cases(xlsx, mldatx, opts)
 %       예) SWR11_bytes_follow_inputs | SWR-04   (한 시트가 여러 요구사항을 확인할 때 한 줄씩)
 %     _links에서 줄을 지워도 이미 걸린 링크는 지우지 않는다 (Test Manager에서 직접 지움)
 % - 테스트 파일 전체: 커버리지 기록 (Decision, Condition, MCDC)
+% - 모델 고정 스텝이 'auto'면 (최상위 모델 주기를 물려받는 단위) 테스트 파일 Setup/Cleanup 콜백으로
+%   테스트 동안만 스텝을 시트의 time 간격으로 바꾼다
 arguments
     xlsx {mustBeTextScalar}
     mldatx {mustBeTextScalar}
@@ -80,6 +82,8 @@ end
 cov = getCoverageSettings(tf);
 cov.RecordCoverage = true;
 cov.MetricSettings = 'dcm';   % d: Decision, c: Condition, m: MCDC
+
+setStepCallbacks(tf, model, xlsx, sheets);
 
 existingNames = caseNames(ts);
 
@@ -144,6 +148,25 @@ if ~isempty(lset)
 end
 fprintf('완료: 케이스 %d개 추가 (전체 %d개), 링크 %d개 추가 (%s)\n', ...
     added, numel(getTestCases(ts)), nLinks, tf.FilePath);
+end
+
+function setStepCallbacks(tf, model, xlsx, sheets)
+% 모델 고정 스텝이 'auto'(최상위 모델 주기를 물려받음)면, 테스트 동안만 시트의 time 간격으로 바꾸는
+% Setup/Cleanup 콜백을 테스트 파일에 넣는다. 'auto'가 아니면 건드리지 않음
+% 테스트 뒤 모델에 '수정됨' 표시가 남지만, 스텝이 auto로 돌아와 있어 저장해도 내용은 같다
+load_system(model);
+if ~strcmp(get_param(model, 'FixedStep'), 'auto')
+    return
+end
+t = readmatrix(xlsx, 'Sheet', sheets(1), 'Range', 'A:A');
+dt = diff(t(~isnan(t)));
+dt = min(dt(dt > 0));
+assert(~isempty(dt), 'make_unit_cases:noStep', '시트 %s의 time 열에서 스텝을 알 수 없습니다', sheets(1));
+step = sprintf('%.15g', dt);
+setProperty(tf, 'SetupCallback', ...
+    sprintf("load_system('%s'); set_param('%s', 'FixedStep', '%s');", model, model, step));
+setProperty(tf, 'CleanupCallback', sprintf("set_param('%s', 'FixedStep', 'auto');", model));
+fprintf('스텝 콜백: %s 고정 스텝 auto -> 테스트 동안 %s\n', model, step);
 end
 
 function n = ensureVerifyLink(rs, tc, reqId)
