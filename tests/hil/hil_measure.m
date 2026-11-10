@@ -12,7 +12,7 @@ function r = hil_measure(scenario, duration, opts)
 % 구성: can0(송신, 프로그램) ↔ can1(수신, candump). 두 채널이 선으로 연결되어 있어야 함 (SWR-35).
 % 순서: can0/can1 올림 → 이전 프로그램 종료 → can1에서 candump 시작 → 프로그램 시작 → 시나리오 → 종료 → 분석
 % 시각은 모두 Pi 시계 기준 (candump -t a 와 date +%s.%N)
-% 결과: r 구조체, tests/hil/results/<scenario>_<시각>.mat (원본 로그 포함)
+% 결과: r 구조체, tests/hil/results/<scenario>_<시각>.mat (원본 로그 포함, 환경 변수 HIL_RESULT_DIR로 폴더 변경 가능)
 %
 % 주의: runModel은 예전 경로의 실행 파일을 띄우므로 쓰지 않는다. 배포 경로의 실행 파일을 sudo로 직접 실행한다
 %       (생성 코드가 SCHED_FIFO를 쓰므로 root 필요).
@@ -97,10 +97,12 @@ sh("pkill -f " + candumpPat + "; pkill -f '[h]il_thermal.sh'");
 raw = sh("cat " + canLog);
 appText = sh("tail -40 " + appLog);
 r = analyze(raw);
-% 처리 속도 (SWR-21): ncnn_infer.cpp가 5초마다 남긴 "[ncnn_infer] fps F infer M ms n N"
-fpsTok = regexp(sh("grep -a 'ncnn_infer\] fps' " + appLog), 'fps ([\d.]+) infer ([\d.]+) ms n (\d+)', 'tokens');
+% 처리 속도 (SWR-21): ncnn_infer.cpp가 5초마다 남긴 "[ncnn_infer] fps F infer M ms max G ms n N"
+% (G: 그 구간에서 연속한 두 결과 사이 최대 간격. 예전 실행 파일은 max가 없음 → NaN)
+fpsTok = regexp(sh("grep -a 'ncnn_infer\] fps' " + appLog), 'fps ([\d.]+) infer ([\d.]+) ms(?: max ([\d.]+) ms)? n (\d+)', 'tokens');
 r.fps = cellfun(@(c) str2double(c{1}), fpsTok(:));
 r.inferMs = cellfun(@(c) str2double(c{2}), fpsTok(:));
+r.gapMs = cellfun(@(c) str2double(c{3}), fpsTok(:));
 % 발열: 1초마다 온도 [°C], ARM 클럭 [MHz]. throttled 값은 측정 전/후 (0x...0 이 아니면 그 순간 제한 중)
 th = sscanf(sh("cat /tmp/hil_thermal.log"), '%f %f %f', [3 Inf])';
 r.thermal = struct('t', th(:, 1), 'tempC', th(:, 2), 'armMHz', th(:, 3) / 1e6);
@@ -119,7 +121,9 @@ else
 end
 report(r);
 if opts.Save
-    d = fullfile(fileparts(mfilename('fullpath')), 'results');
+    % 저장 폴더: 환경 변수 HIL_RESULT_DIR (Process Advisor의 RunHilTests가 PA_Results/hil로 지정), 없으면 tests/hil/results
+    d = getenv('HIL_RESULT_DIR');
+    if isempty(d), d = fullfile(fileparts(mfilename('fullpath')), 'results'); end
     if ~isfolder(d), mkdir(d); end
     f = fullfile(d, sprintf('%s_%s.mat', scenario, datestr(now, 'yyyymmdd_HHMMSS'))); %#ok<TNOW1,DATST>
     save(f, 'r');
@@ -193,7 +197,8 @@ if r.n > 0
     end
 end
 if isfield(r, 'fps') && ~isempty(r.fps)
-    fprintf('[hil] 처리 속도 %s FPS (5초 구간별) · 추론 1회 평균 %.1f ms\n', mat2str(round(r.fps', 1)), mean(r.inferMs));
+    fprintf('[hil] 처리 속도 %s FPS (5초 구간별) · 추론 1회 평균 %.1f ms · 결과 간격 최대 %.0f ms\n', ...
+        mat2str(round(r.fps', 1)), mean(r.inferMs), max(r.gapMs));
 end
 if isfield(r, 'thermal') && ~isempty(r.thermal.t)
     fprintf('[hil] 온도 %.1f → %.1f °C (최고 %.1f) · ARM 클럭 최저 %.0f MHz · throttled %s → %s\n', ...

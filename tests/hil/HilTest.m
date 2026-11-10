@@ -37,11 +37,14 @@ classdef HilTest < matlab.unittest.TestCase
         end
 
         function processingRate(tc)
-            % SWR-21: 약 15 FPS로 인식 (ncnn_infer.cpp가 5초마다 남기는 처리 속도 로그)
+            % SWR-21: 첫 결과 이후 결과 간격 0.2초 이내(5 FPS 이상), 정상 동작 10초 구간 평균 15 FPS 이상
+            % (ncnn_infer.cpp가 5초마다 남기는 처리 속도 로그: 구간 FPS와 구간 안 최대 결과 간격)
             r = hil_measure("normal", 30);
             tc.assertGreaterThanOrEqual(numel(r.fps), 4, '처리 속도 로그가 부족함');
-            tc.verifyGreaterThanOrEqual(mean(r.fps), 13.5, '평균 처리 속도가 약 15 FPS(-10%)보다 낮음 (SWR-21)');
-            tc.verifyGreaterThanOrEqual(min(r.fps), 10, '5초 구간 중 처리 속도가 10 FPS 아래로 떨어짐');
+            fps10 = (r.fps(1:end-1) + r.fps(2:end)) / 2;   % 연속한 5초 구간 2개 = 10초 구간 평균
+            tc.verifyGreaterThanOrEqual(min(fps10), 15, '10초 구간 평균 처리 속도가 15 FPS보다 낮음 (SWR-21)');
+            tc.assertFalse(any(isnan(r.gapMs)), '실행 파일이 결과 간격을 기록하지 않음 (다시 배포 필요)');
+            tc.verifyLessThanOrEqual(max(r.gapMs), 200, '결과 간격이 0.2초를 넘음 (SWR-21)');
         end
 
         function stallStopsSending(tc)

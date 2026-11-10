@@ -12,7 +12,7 @@ extern "C" {
  *      행 1~4: 박스 중심 x, 중심 y, 너비, 높이 [픽셀], 행 5~8: speed_30/60/90/120 점수 (sigmoid 후)
  * 반환: 0 성공, -1 모델 로드 실패, -2 추론 실패, -3 출력 크기가 다름,
  *       -4 인식 정지 시험 중 (Pi에서 /tmp/stall_infer 파일이 있을 때, HIL 전용) (실패하면 y는 0)
- * Pi에서는 5초마다 처리 속도를 표준 출력에 한 줄 남김: "[ncnn_infer] fps 19.60 infer 47.3 ms n 98" (SWR-21 HIL) */
+ * Pi에서는 5초마다 처리 속도를 표준 출력에 한 줄 남김: "[ncnn_infer] fps 19.60 infer 47.3 ms max 101 ms n 98" (SWR-21 HIL) */
 int ncnn_infer(const unsigned char *rgb, float *y);
 
 /* 모델 파일만 미리 읽음 (코어 지정 · 추론은 하지 않음). 반환: 0 성공, -1 로드 실패

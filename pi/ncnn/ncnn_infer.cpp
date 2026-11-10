@@ -43,7 +43,8 @@ static int g_pinned = 0;   /* 추론 스레드 코어 지정을 했는지 */
 #ifdef __linux__
 /* HIL 측정용 (Pi에서만, 시뮬레이션에는 없음)
  * 1) 처리 속도 로그 (SWR-21): FPS_LOG_SEC마다 표준 출력에 한 줄
- *    "[ncnn_infer] fps 19.6 infer 47.3 ms n 98"  (n: 그 구간에 끝난 추론 수, infer: 추론 1회 평균 시간)
+ *    "[ncnn_infer] fps 19.6 infer 47.3 ms max 101 ms n 98"
+ *    (n: 그 구간에 끝난 추론 수, infer: 추론 1회 평균 시간, max: 연속한 두 결과 사이 최대 간격)
  * 2) 인식 정지 시험 훅 (SWR-32): STALL_FILE이 있는 동안 추론하지 않고 -4를 돌려줌 (결과 없음 = ok false)
  *    tests/hil/hil_measure.m의 "stall" 시나리오가 파일을 만들었다 지움. 파일이 없으면 동작에 영향 없음 */
 #define FPS_LOG_SEC 5.0
@@ -57,20 +58,28 @@ static double mono_now(void)
 static double g_fps_t0 = 0.0;   /* 로그 구간 시작 시각 */
 static double g_fps_busy = 0.0; /* 구간 동안 추론에 쓴 시간 합 */
 static int g_fps_n = 0;         /* 구간 동안 끝난 추론 수 */
+static double g_prev_end = 0.0; /* 직전 추론이 끝난 시각 (0: 아직 없음) */
+static double g_gap_max = 0.0;  /* 구간 동안 연속한 두 결과 사이 최대 간격 (SWR-21: 0.2초 이내) */
 static void fps_tick(double t_start, double t_end)
 {
     if (g_fps_t0 == 0.0) {
         g_fps_t0 = t_start;
     }
+    if (g_prev_end > 0.0 && t_end - g_prev_end > g_gap_max) {
+        g_gap_max = t_end - g_prev_end;
+    }
+    g_prev_end = t_end;
     g_fps_busy += t_end - t_start;
     g_fps_n++;
     const double span = t_end - g_fps_t0;
     if (span >= FPS_LOG_SEC) {
-        (void)printf("[ncnn_infer] fps %.2f infer %.1f ms n %d\n", g_fps_n / span, 1000.0 * g_fps_busy / g_fps_n, g_fps_n);
+        (void)printf("[ncnn_infer] fps %.2f infer %.1f ms max %.0f ms n %d\n", g_fps_n / span, 1000.0 * g_fps_busy / g_fps_n,
+                     1000.0 * g_gap_max, g_fps_n);
         (void)fflush(stdout);
         g_fps_t0 = t_end;
         g_fps_busy = 0.0;
         g_fps_n = 0;
+        g_gap_max = 0.0;
     }
 }
 #endif

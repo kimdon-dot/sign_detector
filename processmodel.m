@@ -25,6 +25,8 @@ function processmodel(pm)
     includeCodeInspection = false;
     includeGenerateRequirementsReport = false;
     includeIndexModelsTask = false;
+    % Pi 배포 + HIL 테스트 (tests/hil/DeployToPi.m, RunHilTests.m). Pi 전원 · can0↔can1 연결이 필요하고 약 7분 걸림
+    includeHilTasks = true;
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %% Define Shared Path Variables
@@ -175,6 +177,14 @@ function processmodel(pm)
         slciTask.ReportFolder = fullfile(defaultResultPath,'code_inspection');
     end
 
+    %% Deploy to Raspberry Pi → Run HIL tests
+    % 모델 · C++ 소스가 바뀌면 다시 배포하고, 배포가 바뀌거나 HIL 테스트 파일이 바뀌면 HIL 테스트를 다시 실행
+    if includeHilTasks
+        deployTask = pm.addTask(DeployToPi());
+        hilTask = pm.addTask(RunHilTests());
+        hilTask.addInputQueries(padv.builtin.query.GetOutputsOfDependentTask(Task=deployTask));
+    end
+
     %% Index Models
     if includeIndexModelsTask
         imTask = pm.addTask(padv.builtin.task.IndexModels(IterationQuery=findModels));
@@ -202,6 +212,9 @@ function processmodel(pm)
     end
     if includeTestsPerTestCaseTask && includeMergeTestResultsTask
         mergeTestTask.dependsOn(milTask, "WhenStatus",{'Pass','Fail'});
+    end
+    if includeHilTasks
+        hilTask.dependsOn(deployTask);   % 배포가 성공해야 HIL 테스트
     end
 
     %% Set Task Run-Order
@@ -264,6 +277,16 @@ function processmodel(pm)
     end
     if includeGenerateRequirementsReport && includeMergeTestResultsTask
         rqmtTask.runsAfter(mergeTestTask);
+    end
+    % HIL은 파이프라인 마지막: 정적 검사 · MIL 테스트 · 코드 생성이 끝난 뒤 실기 배포
+    if includeHilTasks && includeGenerateCodeTask
+        deployTask.runsAfter(codegenTask);
+    end
+    if includeHilTasks && includeMergeTestResultsTask
+        deployTask.runsAfter(mergeTestTask);
+    end
+    if includeHilTasks && includeGenerateCodeTask && includeAnalyzeModelCode
+        deployTask.runsAfter(psbfTask);
     end
 
     % Adds Model Testing Process from Process Automation for Simulink Test Add-On
