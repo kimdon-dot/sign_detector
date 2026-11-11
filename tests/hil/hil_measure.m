@@ -19,7 +19,7 @@ function r = hil_measure(scenario, duration, opts)
 arguments
     scenario (1, 1) string {mustBeMember(scenario, ["normal", "load", "boot", "nomodel", "canfail", "stall"])}
     duration (1, 1) double {mustBePositive} = 30
-    opts.Elf (1, 1) string = "~/MATLAB_ws/R2026b/C/Users/don/Desktop/project/cache/sign_detector/sign_detector.elf"
+    opts.Elf (1, 1) string = "~/MATLAB_ws/R2026b/C/Users/don/Desktop/project/sign_detector/cache/sign_detector/sign_detector.elf"
     opts.ModelDir (1, 1) string = "~/sign_detector_project/best_ncnn_model"
     opts.Save (1, 1) logical = true
 end

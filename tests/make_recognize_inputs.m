@@ -121,7 +121,7 @@ end
 end
 
 function p = defaultImageDir()
-% <프로젝트 상위 폴더>/cache/dataset/raw (프로젝트 밖, 다른 외부 파일과 같은 곳)
+% <프로젝트 폴더>/cache/dataset/raw
 root = fileparts(fileparts(mfilename('fullpath')));   % sign_detector
-p = fullfile(fileparts(root), 'cache', 'dataset', 'raw');
+p = fullfile(root, 'cache', 'dataset', 'raw');
 end

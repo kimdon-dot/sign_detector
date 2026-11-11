@@ -15,7 +15,7 @@ classdef DeployToPi < padv.Task
     properties
         Model (1, 1) string = "sign_detector"
         % Pi의 실행 파일. hil_measure의 기본 Elf 경로와 같아야 함 (MATLAB이 코드 생성 폴더 경로를 따라 정함)
-        Elf (1, 1) string = "~/MATLAB_ws/R2026b/C/Users/don/Desktop/project/cache/sign_detector/sign_detector.elf"
+        Elf (1, 1) string = "~/MATLAB_ws/R2026b/C/Users/don/Desktop/project/sign_detector/cache/sign_detector/sign_detector.elf"
         % 참조 모델까지 강제로 다시 빌드 (C++ 변경 반영)
         ForceRebuild (1, 1) logical = true
     end
