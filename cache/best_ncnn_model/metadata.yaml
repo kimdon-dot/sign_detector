@@ -1,0 +1,23 @@
+description: Ultralytics YOLO26n model trained on /content/yolo_dataset/signs.yaml
+author: Ultralytics
+date: '2026-10-30T03:08:21.594688+00:00'
+version: 8.4.189
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 480
+- 640
+names:
+  0: speed_30
+  1: speed_60
+  2: speed_90
+  3: speed_120
+args:
+  batch: 1
+  quantize: null
+channels: 3
+end2end: false
