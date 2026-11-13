@@ -23,8 +23,10 @@ classdef HilTest < matlab.unittest.TestCase
             % ── 2. 실행 파일 · 모델 폴더가 있는지 ──
             [status, ~] = runOnPi(['test -f ' HilTest.ElfDir '/sign_detector.elf']);
             testCase.assertEqual(status, 0, '.elf가 없음 (DeployToPi 먼저)');
+            hidden = [HilTest.ModelDir '_hidden'];
+            runOnPi(['test -d ' hidden ' && mv ' hidden ' ' HilTest.ModelDir]);   % 지난번 noModel 테스트가 숨긴 채 끝났으면 되돌리기
             [status, ~] = runOnPi(['test -d ' HilTest.ModelDir]);
-            testCase.assertEqual(status, 0, '모델 폴더가 없음 (지난 테스트가 _hidden으로 숨긴 채 끝났는지 확인)');
+            testCase.assertEqual(status, 0, '모델 폴더가 없음');
 
             % ── 3. can0, can1 올리기 ──
             for can = ["can0", "can1"]
@@ -192,7 +194,8 @@ function t0 = startApp()
     runOnPi('rm -f /tmp/hil_can.log /tmp/hil_app.log');
     runOnPi('nohup stdbuf -oL candump -t a can1 > /tmp/hil_can.log 2>&1 < /dev/null &');
     % 생성 코드가 실시간 스케줄링을 써서 sudo 필요
-    [~, out] = runOnPi(['cd ' HilTest.ElfDir ' && date +%s.%N && ' ...
+    % ';'로 나눔: 'A && B &'는 A까지 통째로 백그라운드가 돼서 ssh가 안 돌아옴
+    [~, out] = runOnPi(['date +%s.%N; cd ' HilTest.ElfDir '; ' ...
         'sudo nohup ./sign_detector.elf > /tmp/hil_app.log 2>&1 < /dev/null &']);
     t0 = str2double(out);
 end
@@ -209,11 +212,14 @@ end
 
 function f = readFrames(name)
     % candump -t a 한 줄: " (1794208619.192621)  can1  100   [4]  00 00 2F 01"
-    [~, out] = runOnPi('cat /tmp/hil_can.log');
+    [status, out] = runOnPi('cat /tmp/hil_can.log');
+    if status ~= 0
+        error('candump 기록을 못 읽음: %s', out);   % 오류 문장을 프레임으로 읽지 않게
+    end
     f.t = []; f.id = strings(0, 1); f.dlc = []; f.data = zeros(0, 4);
     for line = splitlines(string(out))'
         p = split(strtrim(line));
-        if numel(p) < 8, continue; end
+        if numel(p) < 8 || p(2) ~= "can1", continue; end   % CAN 프레임 줄만
         f.t(end+1, 1)      = str2double(erase(p(1), ["(", ")"]));
         f.id(end+1, 1)     = p(3);
         f.dlc(end+1, 1)    = str2double(erase(p(4), ["[", "]"]));
