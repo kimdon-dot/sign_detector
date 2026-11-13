@@ -1,6 +1,5 @@
-/* ncnn_infer: Pi에서 YOLO26n 추론을 NCNN C++ 라이브러리로 실행 (ncnn_infer.h 참고)
- * 모델: Pi의 Ultralytics NCNN 내보내기 (imgsz 480x640, end2end=False, 입력 in0, 출력 out0 = 8 x 6300)
- * 전처리는 Ultralytics와 같이 RGB, 0~1 (입력이 이미 640x480이라 letterbox 없음) */
+/* ncnn_infer: YOLO26n을 NCNN으로 추론 (ncnn_infer.h 참고)
+ * 모델: Ultralytics NCNN 내보내기 (480x640, 입력 in0, 출력 out0 = 8 x 6300). 전처리: RGB 0~1, letterbox 없음 */
 #include "ncnn_infer.h"
 
 #include <stdio.h>
@@ -13,19 +12,17 @@
 #include <unistd.h>
 #endif
 
-/* /usr/local/include는 gcc 기본 경로 (빌드 정보에 -I/usr/local/include/ncnn을 넣으면 MATLAB이 원격 작업 폴더 경로로 바꿔 버림)
- * PC 시뮬레이션(Windows)은 unit_recognize 모델 설정 Simulation Target의 Include directories에서 찾음 */
+/* Pi: /usr/local/include (gcc 기본 경로. -I로 넣으면 MATLAB이 원격 폴더 경로로 바꿔 버림)
+ * PC: unit_recognize의 Simulation Target > Include directories */
 #include <ncnn/cpu.h>
 #include <ncnn/net.h>
 
-/* 모델 폴더: 환경 변수 NCNN_INFER_MODEL_DIR가 있으면 그것을 씀 (PC 시뮬레이션: 프로젝트 시작 때 pi/ncnn/set_ncnn_model_dir.m이 설정)
- * 없으면 아래 값 (Pi) */
+/* 모델 폴더: 환경 변수 NCNN_INFER_MODEL_DIR (PC: set_ncnn_model_dir.m이 설정), 없으면 아래 값 (Pi) */
 #ifndef NCNN_INFER_MODEL_DIR
 #define NCNN_INFER_MODEL_DIR "/home/pi/sign_detector_project/best_ncnn_model"
 #endif
-/* NCNN이 쓰는 첫 코어. 0번 코어는 Simulink의 기본 주기 스레드와 CAN 송신 스레드에 남겨 둠
- * (최상위 모델 sign_detector에서 추론 주기 0.05초가 CAN 0.1초보다 우선순위가 높아서,
- *  같은 코어를 쓰면 추론이 계속 돌 때 CAN 송신이 밀림, SWR-23) */
+/* NCNN이 쓰는 첫 코어. 코어 0은 기본 주기 · CAN 송신 스레드용
+ * (추론 주기가 CAN보다 우선순위가 높아 같은 코어면 CAN 송신이 밀림, SWR-04) */
 #ifndef NCNN_INFER_FIRST_CPU
 #define NCNN_INFER_FIRST_CPU 1
 #endif
@@ -41,12 +38,10 @@ static int g_threads = 1;  /* 추론 스레드 수 */
 static int g_pinned = 0;   /* 추론 스레드 코어 지정을 했는지 */
 
 #ifdef __linux__
-/* HIL 측정용 (Pi에서만, 시뮬레이션에는 없음)
- * 1) 처리 속도 로그 (SWR-21): FPS_LOG_SEC마다 표준 출력에 한 줄
- *    "[ncnn_infer] fps 19.6 infer 47.3 ms max 101 ms n 98"
- *    (n: 그 구간에 끝난 추론 수, infer: 추론 1회 평균 시간, max: 연속한 두 결과 사이 최대 간격)
- * 2) 인식 정지 시험 훅 (SWR-32): STALL_FILE이 있는 동안 추론하지 않고 -4를 돌려줌 (결과 없음 = ok false)
- *    tests/hil/hil_measure.m의 "stall" 시나리오가 파일을 만들었다 지움. 파일이 없으면 동작에 영향 없음 */
+/* HIL용 (Pi에서만)
+ * 1) 처리 속도 로그 (SWR-21): 5초마다 "[ncnn_infer] fps 19.6 infer 47.3 ms max 101 ms n 98"
+ *    (infer: 추론 1회 평균, max: 연속한 두 결과 사이 최대 간격, n: 추론 수)
+ * 2) 인식 정지 시험 (SWR-32): STALL_FILE이 있는 동안 -4 (결과 없음). HilTest의 stallStopsSending이 씀 */
 #define FPS_LOG_SEC 5.0
 #define STALL_FILE "/tmp/stall_infer"
 static double mono_now(void)
@@ -59,7 +54,7 @@ static double g_fps_t0 = 0.0;   /* 로그 구간 시작 시각 */
 static double g_fps_busy = 0.0; /* 구간 동안 추론에 쓴 시간 합 */
 static int g_fps_n = 0;         /* 구간 동안 끝난 추론 수 */
 static double g_prev_end = 0.0; /* 직전 추론이 끝난 시각 (0: 아직 없음) */
-static double g_gap_max = 0.0;  /* 구간 동안 연속한 두 결과 사이 최대 간격 (SWR-21: 0.2초 이내) */
+static double g_gap_max = 0.0;  /* 구간 동안 연속한 두 결과 사이 최대 간격 */
 static void fps_tick(double t_start, double t_end)
 {
     if (g_fps_t0 == 0.0) {
@@ -124,11 +119,9 @@ static int load_files(void)
 static void pin_infer_thread(void)
 {
 #ifdef __linux__
-    /* Simulink Linux 타깃 시작 코드가 프로세스를 코어 0에 고정하므로(MW_IS_CONCURRENT == 0),
-     * NCNN(OpenMP) 스레드가 만들어지기 전에 이 스레드(추론 주기 스레드)를 코어 NCNN_INFER_FIRST_CPU~끝으로 옮김.
-     * 나중에 만들어지는 OpenMP 스레드도 이 설정을 물려받고, NCNN에도 같은 코어를 알려 줌.
-     * 다른 Simulink 스레드(기본 주기, CAN 송신)는 코어 0에 남음.
-     * 그래서 이 부분은 ncnn_infer_preload(주 스레드, 태스크 생성 전)로 옮기면 안 됨: 이후 만들어지는 모든 스레드가 물려받음 */
+    /* Simulink 시작 코드가 프로세스를 코어 0에 고정하므로, OpenMP 스레드가 생기기 전에 이 스레드를 옮김
+     * (이후 OpenMP 스레드가 물려받음). 다른 Simulink 스레드는 코어 0에 남음.
+     * ncnn_infer_preload(주 스레드)로 옮기면 안 됨: 그 뒤 생기는 모든 스레드가 물려받음 */
     long first, ncpu;
     int threads;
     cpu_range(&first, &ncpu, &threads);
@@ -172,7 +165,7 @@ int ncnn_infer(const unsigned char *rgb, float *y)
     }
 #ifdef __linux__
     if (access(STALL_FILE, F_OK) == 0) {
-        return -4;   /* 인식 정지 시험 (SWR-32 HIL): 결과 없음 */
+        return -4;   /* 인식 정지 시험 */
     }
     const double t_start = mono_now();
 #endif

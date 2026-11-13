@@ -1,13 +1,11 @@
 function processmodel(pm)
-    % Defines the project's processmodel
+    % Process Advisor 파이프라인 (CI 전체 단계)
 
     arguments
         pm padv.ProcessModel
     end
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %% Include/Exclude Tasks in processmodel
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
     includeModelMaintainabilityMetricTask = true;
     includeModelTestingMetricTask = true;
@@ -25,49 +23,39 @@ function processmodel(pm)
     includeCodeInspection = false;
     includeGenerateRequirementsReport = false;
     includeIndexModelsTask = false;
-    % Pi 배포 + HIL 테스트 (tests/hil/DeployToPi.m, RunHilTests.m). Pi 전원 · can0↔can1 연결이 필요하고 약 7분 걸림
+    % Pi 배포 + HIL 테스트 (tests/hil). Pi 전원 · can0↔can1 연결 필요, 약 7분
     includeHilTasks = true;
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %% Define Shared Path Variables
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    % Set default root directory for task results
     pm.DefaultOutputDirectory = fullfile('$PROJECTROOT$', 'PA_Results');
     defaultResultPath = fullfile( ...
         '$DEFAULTOUTPUTDIR$','$ITERATIONARTIFACT$');
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %% Define Shared Queries
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     findModels = padv.builtin.query.FindModels(Name="ModelsQuery");
     findSlModels = padv.builtin.query.FindArtifacts(ArtifactType="sl_model_file");
     findModelsWithTests = padv.builtin.query.FindModelsWithTestCases(Parent=findModels);
     findTestsForModel = padv.builtin.query.FindTestCasesForModel(Parent=findModels);
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %% Register Tasks
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
     %% Collect Model Maintainability Metrics
-    % Tools required: Simulink Check
     if includeModelMaintainabilityMetricTask
         mmMetricTask = pm.addTask(padv.builtin.task.CollectMetrics());
     end
 
     %% Check modeling standards
-    % Tools required: Model Advisor
     if includeModelStandardsTask
         maTask = pm.addTask(padv.builtin.task.RunModelStandards(IterationQuery=findModels));
         maTask.ReportPath = fullfile( ...
             defaultResultPath,'model_standards_results');
-        % 검사 목록: checks/model_standards.json (기본 목록에서 R2026b에 없는 hisl_0311을 뺀 것)
+        % 검사 목록: checks/model_standards.json (기본 목록 - R2026b에 없는 hisl_0311)
         maTask.addInputQueries(padv.builtin.query.FindFileWithAddress( ...
             Type='ma_config_file', Path=fullfile('checks','model_standards.json')));
     end
 
     %% Detect design errors
-    % Tools required: Simulink Design Verifier
     if includeDesignErrorDetectionTask
         dedTask = pm.addTask(padv.builtin.task.DetectDesignErrors(IterationQuery=findModels)); %#ok<*UNRCH>
         dedTask.ReportFilePath = fullfile( ...
@@ -75,7 +63,6 @@ function processmodel(pm)
     end
 
     %% Generate clone detection reports
-    % Tools required: Clone Detector
     if includeFindClones
         %Across Model Clones Instance
         acrossModelCloneDetectTask = pm.addTask(padv.builtin.task.FindClones(Name = "FindAcrossModelClones", ...
@@ -99,7 +86,6 @@ function processmodel(pm)
     end
 
     %% Generate SDD report (System Design Description)
-    %  Tools required: Simulink Report Generator
     if includeSDDTask
         sddTask = pm.addTask(padv.builtin.task.GenerateSDDReport(IterationQuery=findModels));
         sddTask.ReportPath = fullfile( ...
@@ -108,7 +94,6 @@ function processmodel(pm)
     end
 
     %% Generate Simulink web view
-    % Tools required: Simulink Report Generator
     if includeSimulinkWebViewTask
         slwebTask = pm.addTask(padv.builtin.task.GenerateSimulinkWebView(IterationQuery=findModels));
         slwebTask.ReportPath = fullfile(defaultResultPath,'webview');
@@ -116,16 +101,13 @@ function processmodel(pm)
     end
 
     %% Run tests per test case
-    % Tools required: Simulink Test
     if includeTestsPerTestCaseTask
         milTask = pm.addTask(padv.builtin.task.RunTestsPerTestCase(IterationQuery=findTestsForModel));
-        % Configure the tests per testcase task
         milTask.OutputDirectory = fullfile( ...
             '$PROJECTROOT$','PA_Results','test_results');
     end
 
     %% Merge test results
-    % Tools required: Simulink Test (and optionally Simulink Coverage)
     if includeTestsPerTestCaseTask && includeMergeTestResultsTask
         mergeTestTask = pm.addTask(padv.builtin.task.MergeTestResults(IterationQuery=findModelsWithTests, PredecessorTask=milTask));
         mergeTestTask.ReportPath = fullfile( ...
@@ -141,14 +123,11 @@ function processmodel(pm)
     end
 
     %% Generate Code
-    % Tools required: Embedded Coder
-    % By default, we generate code for all models in the project;
     if includeGenerateCodeTask
         codegenTask = pm.addTask(padv.builtin.task.GenerateCode(IterationQuery=findModels));
     end
 
     %% Check coding standards
-    % Tools required: Polyspace Bug Finder
     if includeGenerateCodeTask && includeAnalyzeModelCode
         psbfTask = pm.addTask(padv.builtin.task.AnalyzeModelCode(IterationQuery=findModels, PredecessorTask=codegenTask));
         psbfTask.ResultDir = fullfile(defaultResultPath,'bug_finder');
@@ -156,7 +135,6 @@ function processmodel(pm)
     end
 
     %% Prove Code Quality
-    % Tools required: Polyspace Code Prover
     if includeGenerateCodeTask && includeProveCodeQuality
         pscpTask = pm.addTask(padv.builtin.task.AnalyzeModelCode(Name="ProveCodeQuality", IterationQuery=findModels, PredecessorTask=codegenTask));
         pscpTask.Title = message('padv_spkg:builtin_text:PSCPDemoTaskTitle').getString();
@@ -171,14 +149,13 @@ function processmodel(pm)
     end
 
     %% Inspect Code
-    % Tools required: Simulink Code Inspector
     if includeGenerateCodeTask && includeCodeInspection
         slciTask = pm.addTask(padv.builtin.task.RunCodeInspection(IterationQuery=findModels, PredecessorTask=codegenTask));
         slciTask.ReportFolder = fullfile(defaultResultPath,'code_inspection');
     end
 
     %% Deploy to Raspberry Pi → Run HIL tests
-    % 모델 · C++ 소스가 바뀌면 다시 배포하고, 배포가 바뀌거나 HIL 테스트 파일이 바뀌면 HIL 테스트를 다시 실행
+    % 모델 · C++가 바뀌면 다시 배포, 배포나 HilTest.m이 바뀌면 HIL 다시 실행
     if includeHilTasks
         deployTask = pm.addTask(DeployToPi());
         hilTask = pm.addTask(RunHilTests());
@@ -191,14 +168,11 @@ function processmodel(pm)
     end
 
     %% Generate Requirements report
-    % Tools required: Requirements Toolbox
     if includeGenerateRequirementsReport
         rqmtTask = pm.addTask(padv.builtin.task.GenerateRequirementsReport());
     end
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %% Set Task relationships
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
     %% Set Task Dependencies
     if includeGenerateCodeTask && includeCodeInspection
@@ -249,8 +223,7 @@ function processmodel(pm)
     if includeGenerateCodeTask && includeAnalyzeModelCode && includeProveCodeQuality
         pscpTask.runsAfter(psbfTask);
     end
-    % Set the code generation task to always run after Model Standards,
-    % System Design Description, Test tasks, Clone Detection, and Model Testing Metrics
+    % 코드 생성은 정적 검사 · SDD · MIL 테스트 · 클론 탐지 · 메트릭 뒤에
     if includeGenerateCodeTask && includeModelStandardsTask
         codegenTask.runsAfter(maTask);
     end
@@ -267,10 +240,7 @@ function processmodel(pm)
     if includeGenerateCodeTask && includeModelTestingMetricTask
         codegenTask.runsAfter(mtMetricTask);
     end
-    % Both the Polyspace Bug Finder (PSBF) and the Simulink Code Inspector
-    % (SLCI) tasks depend on the code generation tasks. SLCI task is set to
-    % run after the PSBF task without establishing an execution dependency
-    % by using 'runsAfter'.
+    % Code Inspector는 Bug Finder 뒤에 (실행 의존성 없이 순서만)
     if includeGenerateCodeTask && includeAnalyzeModelCode ...
             && includeCodeInspection
         slciTask.runsAfter(psbfTask);
@@ -278,7 +248,7 @@ function processmodel(pm)
     if includeGenerateRequirementsReport && includeMergeTestResultsTask
         rqmtTask.runsAfter(mergeTestTask);
     end
-    % HIL은 파이프라인 마지막: 정적 검사 · MIL 테스트 · 코드 생성이 끝난 뒤 실기 배포
+    % HIL은 맨 마지막: 정적 검사 · MIL 테스트 · 코드 생성 뒤에 Pi 배포
     if includeHilTasks && includeGenerateCodeTask
         deployTask.runsAfter(codegenTask);
     end
@@ -289,7 +259,7 @@ function processmodel(pm)
         deployTask.runsAfter(psbfTask);
     end
 
-    % Adds Model Testing Process from Process Automation for Simulink Test Add-On
+    % Simulink Test 애드온이 있으면 모델 테스트 프로세스 추가
     if(~isempty(which('pasltest.addProcess')))
         pasltest.addProcess(pm);
     end

@@ -1,5 +1,5 @@
 classdef HilTest < matlab.unittest.TestCase
-    % Raspberry Pi 실기 HIL 테스트
+    % Raspberry Pi HIL 테스트
     %   runtests('HilTest', 'Tag', 'basic')   % Pi 설정을 안 바꾸는 테스트만
     %   runtests('HilTest')                    % 전부
     %

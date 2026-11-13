@@ -11,7 +11,7 @@
 - 확정된 제한속도를 **0.1초마다** CAN(ID `0x100`)으로 보냅니다. 인식이 느려지거나 CAN이 고장 나도 주기는 지켜집니다.
 - 요구사항 → 모델 설계 → MIL 테스트 → CI(Process Advisor) → 코드 생성 → Pi 배포 → HIL 테스트를 **MATLAB/Simulink 한 도구 체인**으로 진행했습니다.
 
-## 실기(HIL) 결과 요약
+## HIL 결과 요약
 
 Raspberry Pi에서 실제로 실행하고 CAN 송신을 기록해 측정한 값입니다 (2026-11-10).
 
@@ -205,7 +205,7 @@ sign_detector/
 | SWR-33 | `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 1 | `canFailureKeepsRunning` |
 | SWR-34 | `sign_detector/Infer_status`, `unit_can_sender/Fcn` | 3 | `bootStatus`, `noModelStopsAfterBootTimeout` |
 
-실측값은 맨 위 [실기(HIL) 결과 요약](#실기hil-결과-요약)에 있습니다. MIL 테스트 수는 Verify 링크 수라 합계가 38보다 큽니다.<br/>
+실측값은 맨 위 [HIL 결과 요약](#hil-결과-요약)에 있습니다. MIL 테스트 수는 Verify 링크 수라 합계가 38보다 큽니다.<br/>
 ※ SWR-21은 Implement 링크가 아직 없습니다.
 
 ### HIL에서 찾아 고친 문제
