@@ -1,7 +1,5 @@
 classdef RunHilTests < padv.Task
-    % Process Advisor 태스크: HilTest를 실행한다 (processmodel.m에서 DeployToPi 다음에 등록)
-    %   결과: PA_Results/hil/hil_results.xml (JUnit), hil_log.txt (전체 출력)
-    %   측정 원본(.mat)은 HilTest가 tests/hil/results/에 남김
+    % Process Advisor 태스크: HilTest 실행. 결과: PA_Results/hil/hil_results.xml (JUnit), hil_log.txt
 
     methods
         function obj = RunHilTests()

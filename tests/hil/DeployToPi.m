@@ -1,6 +1,5 @@
 classdef DeployToPi < padv.Task
-    % Process Advisor 태스크: sign_detector를 Pi용으로 빌드 · 배포한다 (processmodel.m에서 RunHilTests 앞에 등록)
-    %   결과: PA_Results/hil/deploy_log.txt (빌드 출력)
+    % Process Advisor 태스크: sign_detector를 Pi에 빌드 · 배포. 결과: PA_Results/hil/deploy_log.txt
 
     methods
         function obj = DeployToPi()

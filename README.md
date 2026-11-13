@@ -22,18 +22,7 @@ Raspberry Pi에서 실제로 실행하고 CAN 송신을 기록해 측정한 값�
 | 60초 연속 송신 | 누락 없음 | 누락 **0** |
 | CAN 고장 후 복구 | 0.5 s 안에 재개 | **0.15 s** (재시작 없이 자동 재개) |
 | 인식 정지 감지 | 1 s 이상 결과 없으면 송신 중지 | 0.86 s 뒤 중지, 재개 0.23 s |
-
-## 목차
-
-1. [동작 방식](#동작-방식)
-2. [개발 과정](#개발-과정)
-3. [빠른 시작](#빠른-시작)
-4. [폴더 구조](#폴더-구조)
-5. [요구사항](#요구사항)
-6. [검증](#검증)
-7. [실행 방법](#실행-방법)
-8. [알려진 제약](#알려진-제약)
-9. [라이선스 · 출처](#라이선스--출처)
+| 시작 상태 | 첫 결과 전 상태 0, 10 s 안에 결과 없으면 중지 | 첫 프레임 1.2 s, 상태 0 → 1. 모델이 없으면 10 s 뒤 중지 |
 
 ---
 
@@ -68,9 +57,9 @@ flowchart LR
 ### 설계 포인트
 
 - **두 개의 주기 태스크**: 기본 스텝 0.025 s, 추론 0.05 s, CAN 0.1 s. 추론이 늦어져도 CAN 주기는 밀리지 않습니다 (SWR-04).
-- **코어 분리**: 추론 스레드는 첫 호출 때 코어 1~3으로 옮기고, CAN 송신은 코어 0에 남깁니다.
-- **시뮬레이션 / Pi 자동 전환**: Camera와 CAN Tx는 Variant Subsystem입니다. 시뮬레이션에서는 입력 포트 · 출력 신호를, 코드 생성에서는 Pi 카메라 · Pi CAN 블록을 씁니다 (`sim`/`codegen` 조건으로 자동 선택).
-- **모델 미리 읽기**: Pi에서는 초기화 때 `ncnn_infer_preload()`가 NCNN 모델 파일을 읽어 둡니다. 첫 추론이 송신 주기를 밀지 않게 하기 위해서입니다.
+- **코어 분리**: 추론은 코어 1~3, CAN 송신은 코어 0.
+- **시뮬레이션 / Pi 자동 전환**: Camera와 CAN Tx는 Variant Subsystem이라, 시뮬레이션에서는 포트 · 신호를, 코드 생성에서는 Pi 블록을 씁니다.
+- **모델 미리 읽기**: 초기화 때 `ncnn_infer_preload()`가 NCNN 모델을 읽어 둬서 첫 추론이 송신 주기를 밀지 않습니다.
 
 ### CAN 메시지 (can0, 500 kbit/s, ID `0x100`, 4 byte)
 
@@ -94,23 +83,6 @@ flowchart LR
 
 ---
 
-## 개발 과정
-
-```mermaid
-flowchart LR
-    A["요구사항<br/>SWR 12개"] --> B["모델 설계<br/>unit 3 + top"]
-    B --> C["MIL 테스트<br/>38개"]
-    C --> D["CI<br/>Process Advisor"]
-    D --> E["코드 생성<br/>Embedded Coder"]
-    E --> F["Pi 배포"]
-    F --> G["HIL 테스트<br/>7개"]
-    A -. "Implement · Verify 링크<br/>(Requirements Toolbox)" .-> C
-```
-
-요구사항마다 구현 위치(Implement)와 검증 테스트(Verify)를 링크로 연결해, 어떤 요구사항이 어디서 구현되고 무엇으로 검증됐는지 추적할 수 있습니다.
-
----
-
 ## 빠른 시작
 
 Pi 없이 PC에서 MIL 테스트까지 돌려 보는 순서입니다.
@@ -129,6 +101,7 @@ Pi 없이 PC에서 MIL 테스트까지 돌려 보는 순서입니다.
    sltest.testmanager.load('tests/unit_decide.mldatx');   % 또는 Test Manager에서 열기
    sltest.testmanager.run;
    ```
+   엑셀에서 테스트 케이스를 바꿨으면 `make_unit_cases('tests/unit_decide.xlsx', 'tests/unit_decide.mldatx')`로 테스트 파일을 다시 만듭니다.
 
 > `unit_decide`, `unit_can_sender`는 NCNN 없이도 돌아갑니다. `unit_recognize`와 최상위 `sign_detector` 테스트는 2번이 필요합니다.
 
@@ -203,7 +176,7 @@ sign_detector/
 | 배포 | Pi 빌드(참조 모델 강제 재빌드) | Raspberry Pi Blockset |
 | HIL | Pi에서 실제로 실행하고 can1에서 송신을 기록해 판정, 7개 | MATLAB Unit Test |
 
-모든 단계는 `processmodel.m`의 Process Advisor 파이프라인 하나로 묶여 있습니다. 입력(모델 · 테스트 · C++ 소스)이 바뀐 태스크만 다시 실행되고, HIL은 맨 마지막에 실행됩니다.
+모든 단계는 `processmodel.m`의 Process Advisor 파이프라인 하나로 묶여 있고, 입력이 바뀐 태스크만 다시 실행됩니다. 요구사항마다 구현 위치(Implement)와 검증 테스트(Verify)를 Requirements Toolbox 링크로 연결했습니다.
 
 ### HIL 구성
 
@@ -213,27 +186,27 @@ sign_detector/
    시나리오(HilTest.m가 runOnPi로 SSH 실행): CPU 부하, can0 down/up, 모델 파일 숨김, 인식 정지 파일
 ```
 
-- 시각은 모두 Pi 시계로 잽니다(`candump -t a`, `date +%s.%N`). 네트워크 지연이 결과에 섞이지 않습니다.
-- 처리 속도와 인식 정지는 `ncnn_infer.cpp`의 HIL 전용 기능을 씁니다. 5초마다 FPS 로그를 남기고, `/tmp/stall_infer` 파일이 있는 동안 결과를 내지 않습니다. 이 기능은 Pi 빌드에만 들어가고 시뮬레이션에는 없습니다.
+- 시각은 모두 Pi 시계로 잽니다(`candump -t a`, `date +%s.%N`). 네트워크 지연이 섞이지 않습니다.
+- 처리 속도와 인식 정지는 `ncnn_infer.cpp`의 Pi 빌드 전용 기능을 씁니다: 5초마다 FPS 로그, `/tmp/stall_infer`가 있는 동안 결과 안 냄.
 
-### 요구사항별 검증 결과
+### 요구사항별 검증
 
-| ID | 구현 위치 | MIL 테스트 | HIL 테스트 | HIL 실측 (2026-11-10) |
-|---|---|---|---|---|
-| SWR-01 | `unit_recognize/Subsystem` | 6 | – | – |
-| SWR-02 | `unit_decide/Fcn` | 18 | – | – |
-| SWR-03 | `unit_decide/Fcn` | 2 | – | – |
-| SWR-04 | `sign_detector/Rate Transition`, `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 5 | `normalOperation`, `periodUnderCpuLoad` | 평균 100.0 ms (98.2~101.7 ms). CPU 4코어 부하 중 최대 105.1 ms |
-| SWR-11 | `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 4 | `normalOperation` | ID 0x100, 4 byte |
-| SWR-21 | `unit_recognize/Subsystem/Infer`, `ncnn_infer.cpp` ※ | – | `processingRate` | 19 FPS, 추론 1회 52 ms, 결과 간격 최대 95 ms |
-| SWR-22 | `sign_detector/Rate Transition`, `unit_decide/Fcn` | 7 | – (미측정) | – |
-| SWR-31 | `unit_can_sender/Fcn` | 4 | `normalOperation`, `canFailureKeepsRunning`, `stallStopsSending` | 60 s 동안 누락 0. CAN 고장 중 증가, 인식 정지 중 정지 |
-| SWR-32 | `sign_detector/Infer_status`, `unit_can_sender/Fcn` | 1 | `stallStopsSending` | 인식 정지 0.86 s 뒤 송신 중지, 재개 0.23 s |
-| SWR-33 | `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 1 | `canFailureKeepsRunning` | can0 up 0.15 s 뒤 자동 재개 (재시작 없음) |
-| SWR-34 | `sign_detector/Infer_status`, `unit_can_sender/Fcn` | 3 | `bootStatus`, `noModelStopsAfterBootTimeout` | 첫 프레임 1.2 s, 상태 0 → 1. 모델이 없으면 상태 0으로 10 s 뒤 중지 |
+| ID | 구현 위치 | MIL 테스트 | HIL 테스트 |
+|---|---|---|---|
+| SWR-01 | `unit_recognize/Subsystem` | 6 | – |
+| SWR-02 | `unit_decide/Fcn` | 18 | – |
+| SWR-03 | `unit_decide/Fcn` | 2 | – |
+| SWR-04 | `sign_detector/Rate Transition`, `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 5 | `normalOperation`, `periodUnderCpuLoad` |
+| SWR-11 | `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 4 | `normalOperation` |
+| SWR-21 | `unit_recognize/Subsystem/Infer`, `ncnn_infer.cpp` ※ | – | `processingRate` |
+| SWR-22 | `sign_detector/Rate Transition`, `unit_decide/Fcn` | 7 | – (미측정) |
+| SWR-31 | `unit_can_sender/Fcn` | 4 | `normalOperation`, `canFailureKeepsRunning`, `stallStopsSending` |
+| SWR-32 | `sign_detector/Infer_status`, `unit_can_sender/Fcn` | 1 | `stallStopsSending` |
+| SWR-33 | `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 1 | `canFailureKeepsRunning` |
+| SWR-34 | `sign_detector/Infer_status`, `unit_can_sender/Fcn` | 3 | `bootStatus`, `noModelStopsAfterBootTimeout` |
 
-※ SWR-21의 Implement 링크는 아직 걸려 있지 않습니다. 구현 위치는 이 표에만 적혀 있습니다.<br/>
-MIL 테스트 수는 Verify 링크 수입니다. 한 테스트가 여러 요구사항을 검증하므로 합계는 38보다 큽니다.
+실측값은 맨 위 [실기(HIL) 결과 요약](#실기hil-결과-요약)에 있습니다. MIL 테스트 수는 Verify 링크 수라 합계가 38보다 큽니다.<br/>
+※ SWR-21은 Implement 링크가 아직 없습니다.
 
 ### HIL에서 찾아 고친 문제
 
@@ -250,31 +223,13 @@ MIL 테스트 수는 Verify 링크 수입니다. 한 테스트가 여러 요구�
 
 ### 준비
 
-**PC**
-- MATLAB R2026b: Simulink, Embedded Coder, Simulink Test, Simulink Coverage, Simulink Check(CI/CD Automation 포함), Requirements Toolbox, Raspberry Pi Blockset
-- `cache/ncnn_win/`에 Windows용 NCNN ([빠른 시작](#빠른-시작) 2번)
+**PC**: MATLAB R2026b (Simulink, Embedded Coder, Simulink Test, Simulink Coverage, Simulink Check, Requirements Toolbox, Raspberry Pi Blockset) + [빠른 시작](#빠른-시작)의 NCNN
 
 **Raspberry Pi** (Raspberry Pi OS, Debian 13) — 배포 · HIL에만 필요
-- NCNN 정적 라이브러리 `/usr/local/lib/libncnn.a`, 헤더 `/usr/local/include/ncnn/`
-- `pi/libcamera_compat.h`를 `/usr/local/include/`에도 복사 (공유 유틸리티 컴파일용)
-- 저장소의 `cache/best_ncnn_model/`을 Pi의 `/home/pi/sign_detector_project/best_ncnn_model/`로 복사
-- CAN 채널 2개(can0 송신, can1 수신)를 선으로 연결
-- MATLAB에 `raspberrypi` 연결 정보 저장 (Pi 장치 주소 · 계정, 배포에 사용)
-- PC에서 `ssh pi`가 비밀번호 없이 접속되어야 함 (키 인증, HIL 테스트의 `runOnPi`가 사용)
-
-### 시뮬레이션 테스트
-
-```matlab
-openProject('sign_detector.prj');
-sltest.testmanager.load('tests/unit_decide.mldatx');
-sltest.testmanager.run;
-```
-
-엑셀에서 테스트 케이스를 바꿨으면 테스트 파일을 다시 만듭니다.
-
-```matlab
-make_unit_cases('tests/unit_decide.xlsx', 'tests/unit_decide.mldatx');
-```
+- NCNN `/usr/local/lib/libncnn.a`, `/usr/local/include/ncnn/`, 그리고 `pi/libcamera_compat.h`를 `/usr/local/include/`에 복사
+- `cache/best_ncnn_model/`을 `/home/pi/sign_detector_project/best_ncnn_model/`로 복사
+- can0(송신) ↔ can1(수신)을 선으로 연결
+- MATLAB에 `raspberrypi` 연결 정보 저장 (배포용), PC에서 `ssh pi`가 비밀번호 없이 접속 (HIL의 `runOnPi`용)
 
 ### 전체 파이프라인 (Process Advisor)
 
@@ -283,8 +238,7 @@ processAdvisorWindow                              % 앱에서 Run All
 runprocess('GenerateJUnitForProcess', true);      % 또는 CI에서
 ```
 
-결과는 `PA_Results/`에 남습니다. HIL 결과는 `PA_Results/hil/`에 있습니다: `hil_results.xml`(JUnit), `hil_log.txt`. HIL 측정 원본(.mat)은 `tests/hil/results/`에 쌓입니다.<br/>
-Pi 없이 돌리려면 `processmodel.m`에서 `includeHilTasks = false`로 바꿉니다.
+결과는 `PA_Results/`에 남습니다(HIL: `PA_Results/hil/`, 측정 원본: `tests/hil/results/`). Pi 없이 돌리려면 `processmodel.m`에서 `includeHilTasks = false`.
 
 ### HIL만 따로
 
@@ -294,17 +248,17 @@ results = runtests('HilTest');                    % 고장 시나리오 포함 7
 results = runtests('HilTest/bootStatus');         % 테스트 하나만
 ```
 
-`fault` 태그 테스트는 실행 중에 Pi 설정을 잠깐 바꿨다가 끝나면 되돌립니다 (can0 down/up, 모델 폴더 이름 변경).
+`fault` 태그 테스트는 Pi 설정(can0, 모델 폴더 이름)을 잠깐 바꿨다가 되돌립니다.
 
 ---
 
 ## 알려진 제약
 
-- **SWR-22 미측정**: 실기 응답 시간은 측정하지 않았습니다. 정해진 표지판 영상을 Pi 카메라에 넣을 방법이 없어서 시뮬레이션 검증만 했습니다.
-- **발열**: 냉각 없이 4코어 부하를 60 s 주면 86.7 °C까지 오르고 클럭이 1500 MHz로 떨어집니다. 이때 처리 속도는 18.8에서 16.8 FPS로 내려갑니다. 오래 운용하려면 쿨러가 필요합니다.
-- **경로 계산**: Pi 실행 파일 경로는 PC의 코드 생성 폴더 절대 경로를 따라 정해집니다. `HilTest`가 `hil_elf_path`로 계산하므로 저장소를 옮겨도 고칠 곳은 없지만, 프로젝트를 연 상태에서 실행해야 합니다.
-- **입력 목록 직접 관리**: `DeployToPi`의 입력 파일 목록은 생성자에 직접 적혀 있습니다. 모델이나 C++ 파일을 추가하면 이 목록에도 넣어야 합니다.
+- **SWR-22 미측정**: 정해진 표지판 영상을 Pi 카메라에 넣을 방법이 없어 응답 시간은 시뮬레이션으로만 검증했습니다.
+- **발열**: 냉각 없이 4코어 부하 60 s면 86.7 °C, 클럭 1500 MHz, 처리 속도 18.8 → 16.8 FPS. 오래 운용하려면 쿨러가 필요합니다.
+- **입력 목록 직접 관리**: 모델이나 C++ 파일을 추가하면 `DeployToPi` 생성자의 입력 목록에도 넣어야 합니다.
 - **설정 제거 예정**: 참조 모델 강제 재빌드에 쓰는 `UpdateModelReferenceTargets`는 R2026b에서 제거 예정 경고가 납니다.
+- **프로젝트 열고 실행**: HIL의 Pi 실행 파일 경로(`hil_elf_path`)는 프로젝트 설정에서 계산합니다.
 
 ---
 

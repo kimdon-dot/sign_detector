@@ -3,14 +3,11 @@ classdef HilTest < matlab.unittest.TestCase
     %   runtests('HilTest', 'Tag', 'basic')   % Pi 설정을 안 바꾸는 테스트만
     %   runtests('HilTest')                    % 전부
     %
-    % 구성: sign_detector.elf → can0 ═══ 선 ═══ can1 → candump (수신 기록)
-    % 시각은 모두 Pi 시계 (candump -t a, date +%s.%N)
+    % 구성: sign_detector.elf → can0 ═══ 선 ═══ can1 → candump. 시각은 모두 Pi 시계.
     % 배포는 DeployToPi가 먼저 해 둔다고 가정
 
     properties (Constant)
-        % Pi는 PC의 코드 생성 폴더 경로를 ~/MATLAB_ws/R2026b/ 아래에 그대로 만들어서 상대경로는 안 됨
-        % → hil_elf_path가 PC 경로로 계산 (프로젝트가 열려 있어야 함)
-        ElfDir   = char(fileparts(hil_elf_path()));
+        ElfDir   = char(fileparts(hil_elf_path()));   % 프로젝트가 열려 있어야 함
         ModelDir = '/home/pi/sign_detector_project/best_ncnn_model';
     end
 
@@ -193,8 +190,8 @@ function t0 = startApp()
     stopAll();
     runOnPi('rm -f /tmp/hil_can.log /tmp/hil_app.log');
     runOnPi('nohup stdbuf -oL candump -t a can1 > /tmp/hil_can.log 2>&1 < /dev/null &');
-    % 생성 코드가 실시간 스케줄링을 써서 sudo 필요
-    % ';'로 나눔: 'A && B &'는 A까지 통째로 백그라운드가 돼서 ssh가 안 돌아옴
+    % sudo: 생성 코드가 실시간 스케줄링을 씀
+    % ';'로 나눔: 'A && B &'는 줄 전체가 백그라운드가 돼서 ssh가 안 돌아옴
     [~, out] = runOnPi(['date +%s.%N; cd ' HilTest.ElfDir '; ' ...
         'sudo nohup ./sign_detector.elf > /tmp/hil_app.log 2>&1 < /dev/null &']);
     t0 = str2double(out);
@@ -202,7 +199,7 @@ end
 
 function stopAll()
     % 프로그램 · candump · CPU 부하 · 인식 정지 파일 정리
-    % (pkill sign_detector: 프로세스 이름이 15자에서 잘려 sign_detector.elf로는 못 찾음)
+    % (프로세스 이름이 15자에서 잘려 'sign_detector.elf'로는 못 찾음)
     runOnPi('sudo pkill sign_detector; sleep 0.5; pkill candump; pkill -x yes; rm -f /tmp/stall_infer');
 end
 
