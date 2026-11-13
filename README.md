@@ -155,7 +155,7 @@ sign_detector/
 │   ├── <모델>_inputs/             이미지 입력 (.mat, 시트별)
 │   └── hil/
 │       ├── HilTest.m              HIL 테스트 7개 (요구사항별 판정)
-│       ├── hil_measure.m          Pi에서 시나리오 실행 · CAN 기록 · 분석
+│       ├── runOnPi.m              SSH로 Pi에서 명령 실행 (HilTest가 씀)
 │       ├── DeployToPi.m           Process Advisor 태스크: Pi 빌드 · 배포
 │       ├── RunHilTests.m          Process Advisor 태스크: HIL 테스트 실행
 │       └── results/               HIL 측정 원본 (.mat, 검증 근거)
@@ -200,7 +200,7 @@ sign_detector/
 | MIL 통합 | 최상위 모델로 사진 입력 → CAN 출력까지 2개 | Simulink Test |
 | 커버리지 · 테스트 메트릭 | 테스트 결과 병합, 요구사항 기반 테스트 메트릭 | Simulink Coverage, Simulink Check |
 | 코드 생성 | Embedded Coder (ERT, C++) | Embedded Coder |
-| 배포 | Pi 빌드(참조 모델 강제 재빌드), Pi 실행 파일 갱신 확인 | Raspberry Pi Blockset |
+| 배포 | Pi 빌드(참조 모델 강제 재빌드) | Raspberry Pi Blockset |
 | HIL | Pi에서 실제로 실행하고 can1에서 송신을 기록해 판정, 7개 | MATLAB Unit Test |
 
 모든 단계는 `processmodel.m`의 Process Advisor 파이프라인 하나로 묶여 있습니다. 입력(모델 · 테스트 · C++ 소스)이 바뀐 태스크만 다시 실행되고, HIL은 맨 마지막에 실행됩니다.
@@ -210,7 +210,7 @@ sign_detector/
 ```
  Raspberry Pi
    sign_detector.elf ──▶ can0 ═══ 선 ═══ can1 ──▶ candump -t a (수신 기록)
-   시나리오 스크립트(hil_measure.m가 SSH로 실행): CPU 부하, can0 down/up, 모델 파일 숨김, 인식 정지 파일
+   시나리오(HilTest.m가 runOnPi로 SSH 실행): CPU 부하, can0 down/up, 모델 파일 숨김, 인식 정지 파일
 ```
 
 - 시각은 모두 Pi 시계로 잽니다(`candump -t a`, `date +%s.%N`). 네트워크 지연이 결과에 섞이지 않습니다.
@@ -242,7 +242,7 @@ MIL 테스트 수는 Verify 링크 수입니다. 한 테스트가 여러 요구�
 | 시작 직후 CAN 간격 150~366 ms | 첫 추론 안에서 NCNN 모델 파일을 읽느라 태스크가 밀림 | 모델 초기화에서 미리 읽기(`ncnn_infer_preload`) | 시작 직후도 100 ms |
 | CAN 평균 간격 105 ms | 기본 스텝이 추론 주기(0.05 s)라 추론이 넘치면 CAN도 밀림 | 기본 스텝 0.025 s, CAN을 독립 하위 주기 태스크로 | 평균 100.0 ms |
 | CAN 고장 후 재개 동작이 요구사항과 다름 | 요구사항은 "재시작까지 정지", 실제 Pi CAN 블록은 can0 복구 시 자동 재개 | 실측에 맞춰 SWR-33 수정 (근거를 Rationale에 기록) | 0.15 s 뒤 재개 |
-| C++만 고친 뒤 배포해도 Pi에 예전 코드 | Simulink 증분 빌드가 외부 C++ 변경을 알아채지 못함 | `DeployToPi`가 참조 모델까지 강제 재빌드하고 실행 파일 갱신을 확인 | – |
+| C++만 고친 뒤 배포해도 Pi에 예전 코드 | Simulink 증분 빌드가 외부 C++ 변경을 알아채지 못함 | `DeployToPi`가 참조 모델까지 강제 재빌드 | – |
 
 ---
 
@@ -259,7 +259,8 @@ MIL 테스트 수는 Verify 링크 수입니다. 한 테스트가 여러 요구�
 - `pi/libcamera_compat.h`를 `/usr/local/include/`에도 복사 (공유 유틸리티 컴파일용)
 - 저장소의 `cache/best_ncnn_model/`을 Pi의 `/home/pi/sign_detector_project/best_ncnn_model/`로 복사
 - CAN 채널 2개(can0 송신, can1 수신)를 선으로 연결
-- MATLAB에 `raspberrypi` 연결 정보 저장 (Pi 장치 주소 · 계정)
+- MATLAB에 `raspberrypi` 연결 정보 저장 (Pi 장치 주소 · 계정, 배포에 사용)
+- PC에서 `ssh pi`가 비밀번호 없이 접속되어야 함 (키 인증, HIL 테스트의 `runOnPi`가 사용)
 
 ### 시뮬레이션 테스트
 
@@ -282,7 +283,7 @@ processAdvisorWindow                              % 앱에서 Run All
 runprocess('GenerateJUnitForProcess', true);      % 또는 CI에서
 ```
 
-결과는 `PA_Results/`에 남습니다. HIL 결과는 `PA_Results/hil/`에 있습니다: `hil_results.xml`(JUnit), `hil_log.txt`, `measurements/`.<br/>
+결과는 `PA_Results/`에 남습니다. HIL 결과는 `PA_Results/hil/`에 있습니다: `hil_results.xml`(JUnit), `hil_log.txt`. HIL 측정 원본(.mat)은 `tests/hil/results/`에 쌓입니다.<br/>
 Pi 없이 돌리려면 `processmodel.m`에서 `includeHilTasks = false`로 바꿉니다.
 
 ### HIL만 따로
@@ -290,7 +291,7 @@ Pi 없이 돌리려면 `processmodel.m`에서 `includeHilTasks = false`로 바�
 ```matlab
 results = runtests('HilTest', 'Tag', 'basic');   % Pi 설정을 바꾸지 않는 5개 (약 4분)
 results = runtests('HilTest');                    % 고장 시나리오 포함 7개 (약 5분)
-r = hil_measure("normal", 60);                    % 시나리오 하나만 측정 · 요약 출력
+results = runtests('HilTest/bootStatus');         % 테스트 하나만
 ```
 
 `fault` 태그 테스트는 실행 중에 Pi 설정을 잠깐 바꿨다가 끝나면 되돌립니다 (can0 down/up, 모델 폴더 이름 변경).
@@ -301,7 +302,7 @@ r = hil_measure("normal", 60);                    % 시나리오 하나만 측�
 
 - **SWR-22 미측정**: 실기 응답 시간은 측정하지 않았습니다. 정해진 표지판 영상을 Pi 카메라에 넣을 방법이 없어서 시뮬레이션 검증만 했습니다.
 - **발열**: 냉각 없이 4코어 부하를 60 s 주면 86.7 °C까지 오르고 클럭이 1500 MHz로 떨어집니다. 이때 처리 속도는 18.8에서 16.8 FPS로 내려갑니다. 오래 운용하려면 쿨러가 필요합니다.
-- **경로 고정**: Pi 실행 파일 경로(`hil_measure`, `DeployToPi`의 `Elf`)는 PC의 코드 생성 폴더 절대 경로를 따라 정해집니다. 저장소를 다른 위치에 받았다면 이 값을 바꿔야 합니다.
+- **경로 계산**: Pi 실행 파일 경로는 PC의 코드 생성 폴더 절대 경로를 따라 정해집니다. `HilTest`가 `hil_elf_path`로 계산하므로 저장소를 옮겨도 고칠 곳은 없지만, 프로젝트를 연 상태에서 실행해야 합니다.
 - **입력 목록 직접 관리**: `DeployToPi`의 입력 파일 목록은 생성자에 직접 적혀 있습니다. 모델이나 C++ 파일을 추가하면 이 목록에도 넣어야 합니다.
 - **설정 제거 예정**: 참조 모델 강제 재빌드에 쓰는 `UpdateModelReferenceTargets`는 R2026b에서 제거 예정 경고가 납니다.
 

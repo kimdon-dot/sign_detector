@@ -1,106 +1,231 @@
 classdef HilTest < matlab.unittest.TestCase
-    % HilTest  Raspberry Pi 실기 HIL 테스트 (요구사항별 판정)
+    % Raspberry Pi 실기 HIL 테스트
+    %   runtests('HilTest', 'Tag', 'basic')   % Pi 설정을 안 바꾸는 테스트만
+    %   runtests('HilTest')                    % 전부
     %
-    %   results = runtests('HilTest', 'Tag', 'basic');   % Pi 설정을 바꾸지 않는 시나리오만
-    %   results = runtests('HilTest');                    % 전부 (nomodel, canfail은 Pi 설정을 잠깐 바꿨다 되돌림)
-    %
-    % 각 테스트는 hil_measure로 실제로 측정한 뒤 판정한다. 측정 결과는 tests/hil/results/에 남는다.
-    % 테스트 메서드를 Requirements Toolbox로 해당 SWR에 Verify 링크하면 요구사항 편집기의 검증 상태에 반영된다.
-    % 전제: Pi 전원 · 네트워크, can0 ↔ can1 연결, 배포된 sign_detector.elf (SWR-35 운영 조건)
+    % 구성: sign_detector.elf → can0 ═══ 선 ═══ can1 → candump (수신 기록)
+    % 시각은 모두 Pi 시계 (candump -t a, date +%s.%N)
+    % 배포는 DeployToPi가 먼저 해 둔다고 가정
 
     properties (Constant)
-        PERIOD_MS = 100;   % CAN_PERIOD (SWR-04)
-        TOL_MS = 10;       % SWR-04 허용 오차
+        % Pi는 PC의 코드 생성 폴더 경로를 ~/MATLAB_ws/R2026b/ 아래에 그대로 만들어서 상대경로는 안 됨
+        % → hil_elf_path가 PC 경로로 계산 (프로젝트가 열려 있어야 함)
+        ElfDir   = char(fileparts(hil_elf_path()));
+        ModelDir = '/home/pi/sign_detector_project/best_ncnn_model';
+    end
+
+    methods (TestClassSetup)
+        function checkPi(testCase)
+            % ── 1. 접속 ──
+            [status, out] = runOnPi('echo ok');
+            testCase.assertEqual(status, 0, ['접속 실패: ' out]);
+
+            % ── 2. 실행 파일 · 모델 폴더가 있는지 ──
+            [status, ~] = runOnPi(['test -f ' HilTest.ElfDir '/sign_detector.elf']);
+            testCase.assertEqual(status, 0, '.elf가 없음 (DeployToPi 먼저)');
+            [status, ~] = runOnPi(['test -d ' HilTest.ModelDir]);
+            testCase.assertEqual(status, 0, '모델 폴더가 없음 (지난 테스트가 _hidden으로 숨긴 채 끝났는지 확인)');
+
+            % ── 3. can0, can1 올리기 ──
+            for can = ["can0", "can1"]
+                runOnPi("ip -br link show " + can + " | grep -q UP || " + canUpCmd(can));
+                [~, out] = runOnPi("ip -br link show " + can);
+                testCase.assertSubstring(out, 'UP', can + "이 UP이 아님 (CAN HAT 확인)");
+            end
+        end
     end
 
     methods (Test, TestTags = {'basic'})
-        function normalOperation(tc)
-            % SWR-04 0.1 s 주기 · SWR-11 ID/길이 · SWR-31 alive 누락 없음
-            r = hil_measure("normal", 60);
-            tc.verifyGreaterThan(r.n, 500, '60초 동안 프레임이 너무 적음');
-            tc.verifyEqual(unique(r.id), "100", 'CAN ID는 0x100 (SWR-11)');
-            tc.verifyEqual(unique(r.dlc), 4, '길이는 4 byte (SWR-11)');
-            tc.verifyEqual(r.outOfTol, 0, sprintf('간격이 %d±%d ms를 벗어남 (SWR-04)', tc.PERIOD_MS, tc.TOL_MS));
-            tc.verifyEqual(r.aliveGaps, 0, 'alive counter 누락 (SWR-31)');
-            tc.verifyEqual(r.status(end), 1, '정상 동작 상태(1)로 끝나야 함 (SWR-34)');
+        function normalOperation(testCase)
+            % SWR-04 0.1초 주기 · SWR-11 ID/길이 · SWR-31 alive · SWR-34 상태
+            testCase.addTeardown(@stopAll);
+            startApp();
+            pause(60);
+            stopAll();
+            f = readFrames("normal");
+
+            testCase.assertGreaterThan(numel(f.t), 500, '60초 동안 프레임이 너무 적음');
+            testCase.verifyEqual(unique(f.id), "100", 'CAN ID는 0x100 (SWR-11)');
+            testCase.verifyEqual(unique(f.dlc), 4, '길이는 4 byte (SWR-11)');
+            gapMs = diff(f.t) * 1000;
+            testCase.verifyEqual(sum(abs(gapMs - 100) > 10), 0, '간격이 100±10 ms를 벗어남 (SWR-04)');
+            testCase.verifyTrue(all(mod(diff(f.alive), 256) == 1), 'alive가 1씩 늘지 않음 (SWR-31)');
+            testCase.verifyEqual(f.status(end), 1, '상태 1(정상)로 끝나야 함 (SWR-34)');
         end
 
-        function periodUnderCpuLoad(tc)
-            % SWR-04: CPU 4코어 부하 중에도 송신 주기 유지
-            r = hil_measure("load", 60);
-            names = string({r.events.name});
-            inLoad = r.t >= r.events(names == "load start").t & r.t <= r.events(names == "load end").t;
-            dt = diff(r.t(inLoad)) * 1000;
-            tc.verifyGreaterThan(numel(dt), 400, '부하 구간 프레임이 너무 적음');
-            tc.verifyEqual(sum(abs(dt - tc.PERIOD_MS) > tc.TOL_MS), 0, '부하 중 간격이 기준을 벗어남 (SWR-04)');
-            tc.verifyEqual(r.aliveGaps, 0, '부하 중 alive 누락 (SWR-31)');
+        function periodUnderCpuLoad(testCase)
+            % SWR-04: CPU 4코어를 다 써도 0.1초 주기 유지
+            testCase.addTeardown(@stopAll);
+            startApp();
+            pause(5);
+            [~, out] = runOnPi('date +%s.%N && for i in 1 2 3 4; do nohup timeout 55 yes > /dev/null 2>&1 < /dev/null & done');
+            loadStart = str2double(out);
+            [~, out] = runOnPi('pgrep -c -x yes');
+            testCase.verifyEqual(str2double(out), 4, 'CPU 부하(yes 4개)가 시작되지 않음');
+            pause(55);
+            [~, out] = runOnPi('date +%s.%N');
+            loadEnd = str2double(out);
+            stopAll();
+            f = readFrames("load");
+
+            inLoad = f.t >= loadStart & f.t <= loadEnd;
+            gapMs = diff(f.t(inLoad)) * 1000;
+            testCase.verifyGreaterThan(numel(gapMs), 400, '부하 구간 프레임이 너무 적음');
+            testCase.verifyEqual(sum(abs(gapMs - 100) > 10), 0, '부하 중 간격이 100±10 ms를 벗어남 (SWR-04)');
+            testCase.verifyTrue(all(mod(diff(f.alive), 256) == 1), '부하 중 alive 누락 (SWR-31)');
         end
 
-        function processingRate(tc)
-            % SWR-21: 첫 결과 이후 결과 간격 0.2초 이내(5 FPS 이상), 정상 동작 10초 구간 평균 15 FPS 이상
-            % (ncnn_infer.cpp가 5초마다 남기는 처리 속도 로그: 구간 FPS와 구간 안 최대 결과 간격)
-            r = hil_measure("normal", 30);
-            tc.assertGreaterThanOrEqual(numel(r.fps), 4, '처리 속도 로그가 부족함');
-            fps10 = (r.fps(1:end-1) + r.fps(2:end)) / 2;   % 연속한 5초 구간 2개 = 10초 구간 평균
-            tc.verifyGreaterThanOrEqual(min(fps10), 15, '10초 구간 평균 처리 속도가 15 FPS보다 낮음 (SWR-21)');
-            tc.assertFalse(any(isnan(r.gapMs)), '실행 파일이 결과 간격을 기록하지 않음 (다시 배포 필요)');
-            tc.verifyLessThanOrEqual(max(r.gapMs), 200, '결과 간격이 0.2초를 넘음 (SWR-21)');
+        function processingRate(testCase)
+            % SWR-21: 10초 평균 15 FPS 이상, 결과 간격 0.2초 이하
+            % ncnn_infer.cpp가 5초마다 남기는 로그: "[ncnn_infer] fps 19.6 infer 47.3 ms max 101 ms n 98"
+            testCase.addTeardown(@stopAll);
+            startApp();
+            pause(30);
+            stopAll();
+            [~, out] = runOnPi('grep -a ''ncnn_infer] fps'' /tmp/hil_app.log');
+            tok = regexp(out, 'fps ([\d.]+) infer [\d.]+ ms max ([\d.]+) ms', 'tokens');
+            fps   = cellfun(@(c) str2double(c{1}), tok);
+            maxMs = cellfun(@(c) str2double(c{2}), tok);
+
+            testCase.assertGreaterThanOrEqual(numel(fps), 4, 'FPS 로그가 부족함');
+            fps10 = (fps(1:end-1) + fps(2:end)) / 2;   % 5초 구간 2개 평균 = 10초 평균
+            testCase.verifyGreaterThanOrEqual(min(fps10), 15, '10초 평균 FPS가 15보다 낮음 (SWR-21)');
+            testCase.verifyLessThanOrEqual(max(maxMs), 200, '결과 간격이 0.2초를 넘음 (SWR-21)');
         end
 
-        function stallStopsSending(tc)
-            % SWR-32: 인식이 1초 이상 멈추면 송신 중지, 다시 인식하면 재개
-            % SWR-31: 송신하지 않은 주기에는 alive를 올리지 않음 → 재개 후 alive가 1만 증가
-            r = hil_measure("stall", 20);
-            names = string({r.events.name});
-            tS = r.events(names == "stall start").t;
-            tE = r.events(names == "stall end").t;
-            iLast = find(r.t < tE, 1, 'last');
-            stopDelay = r.t(iLast) - tS;
-            tc.verifyGreaterThan(stopDelay, 0.8, '인식이 멈추고 너무 일찍 송신이 멈춤 (SWR-32)');
-            tc.verifyLessThan(stopDelay, 1.15, '인식이 멈추고 1초 뒤에 송신이 멈춰야 함 (SWR-32)');
-            iResume = find(r.t > tE, 1);
-            tc.assertNotEmpty(iResume, '인식이 다시 되었는데 송신이 재개되지 않음');
-            tc.verifyLessThan(r.t(iResume) - tE, 0.5, '인식 재개 후 0.5초 안에 송신이 재개되어야 함');
-            tc.verifyEqual(mod(r.alive(iResume) - r.alive(iLast), 256), 1, '송신하지 않은 동안 alive가 증가함 (SWR-31)');
+        function stallStopsSending(testCase)
+            % SWR-32: 인식이 1초 멈추면 송신 중지, 다시 인식하면 재개
+            % SWR-31: 안 보낸 동안 alive는 그대로 → 재개 후 1만 증가
+            % /tmp/stall_infer가 있는 동안 ncnn_infer.cpp가 결과를 안 냄
+            testCase.addTeardown(@stopAll);
+            startApp();
+            pause(5);
+            [~, out] = runOnPi('touch /tmp/stall_infer && date +%s.%N');
+            stallStart = str2double(out);
+            pause(4);
+            [~, out] = runOnPi('rm -f /tmp/stall_infer && date +%s.%N');
+            stallEnd = str2double(out);
+            pause(11);
+            stopAll();
+            f = readFrames("stall");
+
+            iLast  = find(f.t < stallEnd, 1, 'last');   % 멈추기 전 마지막 프레임
+            iFirst = find(f.t > stallEnd, 1);           % 재개 후 첫 프레임
+            stopDelay = f.t(iLast) - stallStart;
+            testCase.verifyGreaterThan(stopDelay, 0.8, '너무 일찍 송신이 멈춤 (SWR-32)');
+            testCase.verifyLessThan(stopDelay, 1.15, '1초 뒤에 송신이 멈춰야 함 (SWR-32)');
+            testCase.assertNotEmpty(iFirst, '인식이 돌아왔는데 송신이 재개되지 않음');
+            testCase.verifyLessThan(f.t(iFirst) - stallEnd, 0.5, '0.5초 안에 재개되어야 함');
+            testCase.verifyEqual(mod(f.alive(iFirst) - f.alive(iLast), 256), 1, '안 보낸 동안 alive가 늘어남 (SWR-31)');
         end
 
-        function bootStatus(tc)
+        function bootStatus(testCase)
             % SWR-34: 시작 직후부터 송신, 상태는 0(준비 중) → 1(정상)로만 바뀜
-            r = hil_measure("boot", 15);
-            tc.assertGreaterThan(r.n, 0, '시작 후 프레임이 없음');
-            tc.verifyLessThan(r.firstFrameDelay, 2, '시작 후 2초 안에 송신이 시작되어야 함');
-            tc.verifyTrue(all(diff(r.status) >= 0), '상태가 1에서 0으로 되돌아감');
-            tc.verifyEqual(r.status(end), 1, '첫 인식 후 상태 1이어야 함 (SWR-34)');
+            testCase.addTeardown(@stopAll);
+            t0 = startApp();
+            pause(15);
+            stopAll();
+            f = readFrames("boot");
+
+            testCase.assertNotEmpty(f.t, '시작 후 프레임이 없음');
+            testCase.verifyLessThan(f.t(1) - t0, 2, '시작 후 2초 안에 송신해야 함');
+            testCase.verifyTrue(all(diff(f.status) >= 0), '상태가 1에서 0으로 돌아감');
+            testCase.verifyEqual(f.status(end), 1, '첫 인식 후 상태 1이어야 함 (SWR-34)');
         end
     end
 
     methods (Test, TestTags = {'fault'})
-        function noModelStopsAfterBootTimeout(tc)
-            % SWR-34: 모델을 못 읽으면 상태 0으로 송신하다가 10초(BOOT_SEC) 뒤 멈춤
-            r = hil_measure("nomodel", 15);
-            tc.assertGreaterThan(r.n, 0, '모델 없음에서도 처음에는 송신해야 함');
-            tc.verifyTrue(all(r.status == 0), '모델이 없으면 상태는 0이어야 함');
-            % BOOT_SEC는 프로그램 안의 첫 송신 주기부터 세므로 첫 프레임 기준 (프로세스 시작~첫 프레임 약 1.2 s는 제외)
-            tc.verifyLessThan(r.t(end) - r.t(1), 10.2, '첫 프레임부터 10초 뒤 송신이 멈춰야 함 (BOOT_SEC)');
-            tc.verifyLessThan(r.t(end) - r.t0, r.duration - 2, '측정이 끝나기 전에 송신이 멈춰 있어야 함');
+        function noModelStopsAfterBootTimeout(testCase)
+            % SWR-34: 모델 파일을 못 읽으면 상태 0으로 보내다가 10초 뒤 멈춤
+            hidden = [HilTest.ModelDir '_hidden'];
+            runOnPi(['mv ' HilTest.ModelDir ' ' hidden]);                          % 모델 폴더 숨기기
+            testCase.addTeardown(@() runOnPi(['mv ' hidden ' ' HilTest.ModelDir]));  % 끝나면 되돌리기
+            testCase.addTeardown(@stopAll);
+            t0 = startApp();
+            pause(15);
+            stopAll();
+            f = readFrames("nomodel");
+
+            testCase.assertNotEmpty(f.t, '모델이 없어도 처음에는 송신해야 함');
+            testCase.verifyTrue(all(f.status == 0), '모델이 없으면 상태는 0이어야 함');
+            % 10초는 첫 프레임부터 셈 (프로그램 시작 → 첫 프레임 약 1.2초는 빼고)
+            testCase.verifyLessThan(f.t(end) - f.t(1), 10.2, '첫 프레임부터 10초 뒤 멈춰야 함');
+            testCase.verifyLessThan(f.t(end) - t0, 13, '측정이 끝나기 전에 송신이 멈춰 있어야 함');
         end
 
-        function canFailureKeepsRunning(tc)
-            % SWR-33: can0이 내려가도 프로그램은 계속 돌고, 다시 올라오면 재시작 없이 0.5초 안에 송신 재개
-            % SWR-31: 멈춘 동안에도 alive는 증가 → 재개 후 첫 프레임에서 alive가 건너뜀
-            r = hil_measure("canfail", 20);
-            names = string({r.events.name});
-            tDown = r.events(names == "can0 down").t;
-            tUp = r.events(names == "can0 up").t;
-            tc.verifyTrue(any(names == "app alive while can0 down: true"), 'can0 down 중 프로그램이 죽음 (SWR-33)');
-            tc.verifyEqual(sum(r.t > tDown + 0.2 & r.t < tUp), 0, 'can0 down 동안 송신이 없어야 함');
-            iResume = find(r.t > tUp - 0.2 & r.t > tDown + 0.2, 1);
-            tc.assertNotEmpty(iResume, 'can0 up 후 송신이 재개되지 않음 (SWR-33)');
-            tc.verifyLessThan(r.t(iResume) - tUp, 0.5, 'can0 up 후 0.5초 안에 재개되어야 함 (SWR-33)');
-            tc.verifyGreaterThan(sum(r.t > tUp), 50, '재개 후 계속 송신해야 함');
-            skipped = mod(r.alive(iResume) - r.alive(iResume - 1), 256) - 1;
-            downCycles = (tUp - tDown) / 0.1;
-            tc.verifyGreaterThan(skipped, 0.8 * downCycles, '멈춘 동안 alive가 증가해야 함 (SWR-31)');
+        function canFailureKeepsRunning(testCase)
+            % SWR-33: can0이 내려가도 프로그램은 계속 돌고, 다시 올라오면 0.5초 안에 재개
+            % SWR-31: 못 보낸 동안에도 alive는 증가 → 재개 후 alive가 건너뜀
+            testCase.addTeardown(@stopAll);
+            testCase.addTeardown(@() runOnPi(canUpCmd("can0")));   % 중간에 실패해도 can0 되살리기
+            startApp();
+            pause(5);
+            [~, out] = runOnPi('sudo ip link set can0 down && date +%s.%N');
+            canDown = str2double(out);
+            pause(5);
+            [status, ~] = runOnPi('pgrep sign_detector');
+            aliveWhileDown = (status == 0);
+            [~, out] = runOnPi("date +%s.%N && " + canUpCmd("can0"));   % up 직전 시각
+            canUp = str2double(out);
+            pause(10);
+            stopAll();
+            f = readFrames("canfail");
+
+            testCase.verifyTrue(aliveWhileDown, 'can0 down 중 프로그램이 죽음 (SWR-33)');
+            testCase.verifyEqual(sum(f.t > canDown + 0.2 & f.t < canUp), 0, 'can0 down 동안 송신이 없어야 함');
+            iFirst = find(f.t > canDown + 0.2, 1);   % 재개 후 첫 프레임
+            testCase.assertNotEmpty(iFirst, 'can0 up 후 송신이 재개되지 않음 (SWR-33)');
+            testCase.verifyLessThan(f.t(iFirst) - canUp, 0.5, 'can0 up 후 0.5초 안에 재개되어야 함 (SWR-33)');
+            testCase.verifyGreaterThan(sum(f.t > canUp), 50, '재개 후 계속 송신해야 함');
+            skipped = mod(f.alive(iFirst) - f.alive(iFirst - 1), 256) - 1;
+            downCycles = (canUp - canDown) / 0.1;
+            testCase.verifyGreaterThan(skipped, 0.8 * downCycles, '못 보낸 동안 alive가 늘어야 함 (SWR-31)');
         end
     end
+end
+
+% ───────────────────────── 도우미 함수 ─────────────────────────
+
+function t0 = startApp()
+    % 이전 실행 정리 → can1 기록 시작 → 프로그램 시작. t0 = 시작 직전 Pi 시각
+    stopAll();
+    runOnPi('rm -f /tmp/hil_can.log /tmp/hil_app.log');
+    runOnPi('nohup stdbuf -oL candump -t a can1 > /tmp/hil_can.log 2>&1 < /dev/null &');
+    % 생성 코드가 실시간 스케줄링을 써서 sudo 필요
+    [~, out] = runOnPi(['cd ' HilTest.ElfDir ' && date +%s.%N && ' ...
+        'sudo nohup ./sign_detector.elf > /tmp/hil_app.log 2>&1 < /dev/null &']);
+    t0 = str2double(out);
+end
+
+function stopAll()
+    % 프로그램 · candump · CPU 부하 · 인식 정지 파일 정리
+    % (pkill sign_detector: 프로세스 이름이 15자에서 잘려 sign_detector.elf로는 못 찾음)
+    runOnPi('sudo pkill sign_detector; sleep 0.5; pkill candump; pkill -x yes; rm -f /tmp/stall_infer');
+end
+
+function cmd = canUpCmd(can)
+    cmd = "sudo ip link set " + can + " up type can bitrate 500000 restart-ms 100";
+end
+
+function f = readFrames(name)
+    % candump -t a 한 줄: " (1794208619.192621)  can1  100   [4]  00 00 2F 01"
+    [~, out] = runOnPi('cat /tmp/hil_can.log');
+    f.t = []; f.id = strings(0, 1); f.dlc = []; f.data = zeros(0, 4);
+    for line = splitlines(string(out))'
+        p = split(strtrim(line));
+        if numel(p) < 8, continue; end
+        f.t(end+1, 1)      = str2double(erase(p(1), ["(", ")"]));
+        f.id(end+1, 1)     = p(3);
+        f.dlc(end+1, 1)    = str2double(erase(p(4), ["[", "]"]));
+        f.data(end+1, :)   = hex2dec(p(5:8))';
+    end
+    f.speed    = f.data(:, 1);   % byte 1 제한속도
+    f.detected = f.data(:, 2);   % byte 2 확정 여부
+    f.alive    = f.data(:, 3);   % byte 3 alive counter
+    f.status   = f.data(:, 4);   % byte 4 상태 (0 준비 중, 1 정상)
+
+    % 측정 원본 남기기: tests/hil/results/<이름>_<시각>.mat
+    folder = fullfile(fileparts(mfilename('fullpath')), 'results');
+    file = name + "_" + string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) + ".mat";
+    save(fullfile(folder, file), 'f');
 end
