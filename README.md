@@ -31,17 +31,18 @@ Raspberry Pi에서 실제로 실행하고 CAN 송신을 기록해 측정한 값�
 ```mermaid
 flowchart LR
     CAM["📷 Camera<br/>640x480"] -->|rgb| REC["unit_recognize<br/>YOLO26n (NCNN)<br/>신뢰도 0.5, 최고 1개"]
-    REC -->|"cls, ok"| RT["Rate Transition<br/>0.05 s → 0.1 s"]
-    RT --> DEC["unit_decide<br/>5프레임 중 3개 이상이면 확정"]
-    DEC -->|"limit, detected"| CANS["unit_can_sender<br/>alive counter · 고장 처리"]
+    REC -->|"cls (ok일 때만)"| DEC["unit_decide<br/>5프레임 중 3개 이상이면 확정"]
+    DEC -->|"limit, detected"| RT["Rate Transition<br/>0.05 s → 0.1 s"]
+    REC -->|"ok → ready, last_t"| RT
+    RT --> CANS["unit_can_sender<br/>alive counter · 고장 처리"]
     CANS --> TX["🔌 CAN Tx (can0)<br/>10 Hz, ID 0x100, 4 byte"]
 
     subgraph T1["추론 태스크 0.05 s · 코어 1~3"]
         CAM
         REC
+        DEC
     end
     subgraph T2["CAN 태스크 0.1 s · 코어 0"]
-        DEC
         CANS
         TX
     end
@@ -58,6 +59,9 @@ flowchart LR
 
 - **두 개의 주기 태스크**: 기본 스텝 0.025 s, 추론 0.05 s, CAN 0.1 s. 추론이 늦어져도 CAN 주기는 밀리지 않습니다 (SWR-04).
 - **코어 분리**: 추론은 코어 1~3, CAN 송신은 코어 0.
+- **태스크 간 전달**: 추론 스텝이 끝날 때마다 최신 값 4개(제한속도 · 확정 여부 · 준비 · 마지막 결과 시각)를 한 묶음으로 보호 버퍼에 넘기고, CAN 태스크는 그 버퍼만 읽습니다. 추론이 주기(0.05 s)를 넘겨도 값이 밀리지 않습니다 (Rate Transition, 결정적 전달 끔).
+- **결과가 있는 프레임만 확정에 사용**: `unit_decide`는 추론이 성공한 프레임(`ok = 1`)에서만 실행됩니다 (`Decide_if_ok`). 결과가 1초 이상 끊기면 기록을 비우고 다시 셉니다 (SWR-02).
+- **카메라 정지 감지**: Pi 카메라 블록은 새 프레임이 없으면 직전 프레임을 그대로 돌려주므로, 완전히 같은 영상이 3번 이어지면 결과 없음으로 처리합니다 (`ncnn_infer.cpp`, Pi에서만). 1초 이어지면 인식 정지가 됩니다 (SWR-32).
 - **시뮬레이션 / Pi 자동 전환**: Camera와 CAN Tx는 Variant Subsystem이라, 시뮬레이션에서는 포트 · 신호를, 코드 생성에서는 Pi 블록을 씁니다.
 - **모델 미리 읽기**: 초기화 때 `ncnn_infer_preload()`가 NCNN 모델을 읽어 둬서 첫 추론이 송신 주기를 밀지 않습니다.
 
@@ -188,13 +192,14 @@ sign_detector/
 
 - 시각은 모두 Pi 시계로 잽니다(`candump -t a`, `date +%s.%N`). 네트워크 지연이 섞이지 않습니다.
 - 처리 속도와 인식 정지는 `ncnn_infer.cpp`의 Pi 빌드 전용 기능을 씁니다: 5초마다 FPS 로그, `/tmp/stall_infer`가 있는 동안 결과 안 냄.
+- 인식 정지 기능은 `DeployToPi`로 배포한 빌드(`-DNCNN_INFER_HIL`)에만 들어갑니다. Simulink에서 직접 빌드한 실행 파일에는 없어서 `stallStopsSending`이 실패합니다.
 
 ### 요구사항별 검증
 
 | ID | 구현 위치 | MIL 테스트 | HIL 테스트 |
 |---|---|---|---|
 | SWR-01 | `unit_recognize/Subsystem` | 6 | – |
-| SWR-02 | `unit_decide/Fcn` | 18 | – |
+| SWR-02 | `unit_decide/Fcn`, `sign_detector/Decide_if_ok` | 18 | – |
 | SWR-03 | `unit_decide/Fcn` | 2 | – |
 | SWR-04 | `sign_detector/Rate Transition`, `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 5 | `normalOperation`, `periodUnderCpuLoad` |
 | SWR-11 | `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 4 | `normalOperation` |
@@ -259,6 +264,9 @@ results = runtests('HilTest/bootStatus');         % 테스트 하나만
 - **입력 목록 직접 관리**: 모델이나 C++ 파일을 추가하면 `DeployToPi` 생성자의 입력 목록에도 넣어야 합니다.
 - **설정 제거 예정**: 참조 모델 강제 재빌드에 쓰는 `UpdateModelReferenceTargets`는 R2026b에서 제거 예정 경고가 납니다.
 - **프로젝트 열고 실행**: HIL의 Pi 실행 파일 경로(`hil_elf_path`)는 프로젝트 설정에서 계산합니다.
+- **Pi에서 다시 측정 필요**: 태스크 간 전달 방식, 결과가 있는 프레임만 확정에 사용, 카메라 정지 감지, HIL 빌드 전용 인식 정지 기능은 MIL 테스트와 코드 생성으로만 확인했습니다. 맨 위 HIL 결과 요약은 이 변경 전 측정값입니다.
+- **카메라 정지 감지의 한계**: 영상이 바이트 단위로 완전히 같은지로 판단합니다. 화면 전체가 포화되거나 완전히 검어서 연속한 영상이 똑같으면 카메라 정지로 봅니다. 요구사항 문서(SWR-32)에는 아직 적지 않았습니다.
+- **HIL 빌드와 일반 빌드**: `DeployToPi` 뒤에 Simulink에서 그냥 빌드하면 바뀐 게 없다고 보고 HIL 빌드(인식 정지 기능 포함)를 그대로 둡니다. 인식 정지 기능이 없는 실행 파일이 필요하면 참조 모델까지 강제로 다시 빌드해야 합니다.
 
 ---
 

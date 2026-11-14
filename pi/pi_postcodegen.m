@@ -3,6 +3,7 @@ function pi_postcodegen(buildInfo, sources)
 %   codertarget.postCodeGenHookCommand(h); pi_postcodegen(buildInfo)
 % sources: 넣을 C++ 소스. "ncnn" = ncnn_infer.cpp (기본), "can" = 예전 can_tx.cpp (지금은 안 씀)
 % 공통: NCNN 정적 링크 + -fopenmp, libcamera 0.7 대응(-std=c++20, libcamera_compat.h)
+% 환경 변수 SIGN_DETECTOR_HIL=1이면 -DNCNN_INFER_HIL 추가 (DeployToPi가 빌드 동안만 설정)
 % 파일은 빌드 폴더로 복사해야 Pi로 같이 넘어감
 if nargin < 2
     sources = "ncnn";
@@ -22,7 +23,12 @@ for name = string(sources)
             error('pi_postcodegen: 모르는 소스 "%s" (ncnn, can 중 하나)', name);
     end
 end
-addCompileFlags(buildInfo, '-std=c++20 -include libcamera_compat.h');
+flags = '-std=c++20 -include libcamera_compat.h';
+if strcmp(getenv('SIGN_DETECTOR_HIL'), '1')
+    % HIL 배포(DeployToPi)에서만: ncnn_infer.cpp의 인식 정지 훅을 켬. 일반 빌드에는 넣지 않음
+    flags = [flags ' -DNCNN_INFER_HIL'];
+end
+addCompileFlags(buildInfo, flags);
 addLinkFlags(buildInfo, '-fopenmp'); % NCNN이 OpenMP를 씀 (libgomp)
 % 정적 라이브러리는 오브젝트 뒤에 와야 해서, 링크 플래그 대신 오브젝트 뒤에 붙는 MakeVar에 넣음
 add_target_libs(buildInfo, '/usr/local/lib/libncnn.a');

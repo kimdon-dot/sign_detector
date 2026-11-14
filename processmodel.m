@@ -16,7 +16,7 @@ function processmodel(pm)
     includeSDDTask = true;
     includeSimulinkWebViewTask = true;
     includeTestsPerTestCaseTask = true;
-    includeMergeTestResultsTask = true;
+    includeMergeTestResultsTask = true && includeTestsPerTestCaseTask;   % 병합할 MIL 결과가 있어야 함
     includeGenerateCodeTask = true;
     includeAnalyzeModelCode = true && padv.internal.util.isPolyspaceSupported && exist('polyspaceroot','file');
     includeProveCodeQuality = true && padv.internal.util.isPolyspaceSupported && (~isempty(ver('pscodeprover')) || ~isempty(ver('pscodeproverserver')));

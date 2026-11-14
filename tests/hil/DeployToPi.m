@@ -42,6 +42,9 @@ classdef DeployToPi < padv.Task
             % 참조 모델까지 강제로 다시 빌드 (C++만 바뀌면 Simulink가 몰라서 Pi에 예전 코드가 남음)
             oldUpdate = get_param(m, 'UpdateModelReferenceTargets');
             set_param(m, 'UpdateModelReferenceTargets', 'Force');
+            % HIL용 빌드 표시: pi_postcodegen이 -DNCNN_INFER_HIL을 붙여 인식 정지 훅을 켬 (HilTest의 stallStopsSending용)
+            oldHil = getenv('SIGN_DETECTOR_HIL');
+            setenv('SIGN_DETECTOR_HIL', '1');
 
             % ── 3. 빌드 · 배포 (출력은 deploy_log.txt에) ──
             if isfile(logFile), delete(logFile); end
@@ -59,6 +62,7 @@ classdef DeployToPi < padv.Task
             % (열어 두면 이어서 도는 메트릭 태스크가 참조 모델에서 Error를 냄)
             codertarget.data.setParameterValue(cs, 'Runtime.BuildAction', oldAction);
             set_param(m, 'UpdateModelReferenceTargets', oldUpdate);
+            setenv('SIGN_DETECTOR_HIL', oldHil);
             for b = setdiff(openModels(), before)
                 close_system(b, 0);   % 0: 저장 안 함
             end

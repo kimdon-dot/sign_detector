@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <vector>
 #ifdef __linux__
 #include <sched.h>
 #include <time.h>
@@ -41,14 +42,38 @@ static int g_pinned = 0;   /* 추론 스레드 코어 지정을 했는지 */
 /* HIL용 (Pi에서만)
  * 1) 처리 속도 로그 (SWR-21): 5초마다 "[ncnn_infer] fps 19.6 infer 47.3 ms max 101 ms n 98"
  *    (infer: 추론 1회 평균, max: 연속한 두 결과 사이 최대 간격, n: 추론 수)
- * 2) 인식 정지 시험 (SWR-32): STALL_FILE이 있는 동안 -4 (결과 없음). HilTest의 stallStopsSending이 씀 */
+ * 2) 인식 정지 시험 (SWR-32): STALL_FILE이 있는 동안 -4 (결과 없음). HilTest의 stallStopsSending이 씀
+ *    NCNN_INFER_HIL을 정의한 빌드에만 들어감 (DeployToPi → pi_postcodegen이 -DNCNN_INFER_HIL을 붙임).
+ *    /tmp는 누구나 쓸 수 있어서, 일반 빌드에 넣으면 파일 하나로 인식을 멈출 수 있음 */
 #define FPS_LOG_SEC 5.0
+#ifdef NCNN_INFER_HIL
 #define STALL_FILE "/tmp/stall_infer"
+#endif
 static double mono_now(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+/* 카메라 정지 감지 (Pi에서만. PC 테스트는 같은 사진을 계속 넣으므로 쓰지 않음)
+ * Pi 카메라 블록은 새 프레임이 없으면 직전 프레임을 그대로 돌려주고 상태 출력도 없어서, 카메라가 멈추면
+ * 멈춘 영상으로 추론이 계속 성공함. 직전과 완전히 같은 영상이 STALE_FRAMES번 이어지면 결과 없음(-5)으로 처리
+ * → ok = 0 → 1초 이어지면 인식 정지 (SWR-32). 추론이 카메라보다 빨라 어쩌다 같은 프레임을 한 번 더 읽는 것은 그대로 추론 */
+#define STALE_FRAMES 3
+static std::vector<unsigned char> g_prev_rgb; /* 직전 호출의 영상 */
+static int g_same_n = 0;                      /* 직전과 같은 영상이 이어진 횟수 */
+static int same_frame_count(const unsigned char *rgb)
+{
+    const size_t n = (size_t)H * W * 3;
+    if (g_prev_rgb.size() == n && memcmp(g_prev_rgb.data(), rgb, n) == 0) {
+        if (g_same_n < STALE_FRAMES) {
+            g_same_n++;
+        }
+    } else {
+        g_prev_rgb.assign(rgb, rgb + n);
+        g_same_n = 0;
+    }
+    return g_same_n;
 }
 static double g_fps_t0 = 0.0;   /* 로그 구간 시작 시각 */
 static double g_fps_busy = 0.0; /* 구간 동안 추론에 쓴 시간 합 */
@@ -111,6 +136,9 @@ static int load_files(void)
         return -1;
     }
     (void)printf("[ncnn_infer] model %s, %d threads on cpu %ld-%ld (of %ld)\n", dir.c_str(), g_threads, first, ncpu - 1, ncpu);
+#if defined(__linux__) && defined(NCNN_INFER_HIL)
+    (void)printf("[ncnn_infer] HIL stall hook on (%s)\n", STALL_FILE);   /* HilTest가 이 줄로 훅이 있는 빌드인지 확인 */
+#endif
     (void)fflush(stdout);
     return 1;
 }
@@ -164,8 +192,13 @@ int ncnn_infer(const unsigned char *rgb, float *y)
         return -1;
     }
 #ifdef __linux__
+#ifdef NCNN_INFER_HIL
     if (access(STALL_FILE, F_OK) == 0) {
         return -4;   /* 인식 정지 시험 */
+    }
+#endif
+    if (same_frame_count(rgb) >= STALE_FRAMES) {
+        return -5;   /* 카메라에서 새 영상이 안 옴 */
     }
     const double t_start = mono_now();
 #endif

@@ -99,6 +99,9 @@ classdef HilTest < matlab.unittest.TestCase
             testCase.addTeardown(@stopAll);
             startApp();
             pause(5);
+            % 정지 훅은 DeployToPi로 배포한 빌드에만 있음 (-DNCNN_INFER_HIL)
+            [status, ~] = runOnPi('grep -q ''HIL stall hook on'' /tmp/hil_app.log');
+            testCase.assertEqual(status, 0, '인식 정지 훅이 없는 빌드 (DeployToPi로 다시 배포)');
             [~, out] = runOnPi('touch /tmp/stall_infer && date +%s.%N');
             stallStart = str2double(out);
             pause(4);
@@ -111,7 +114,9 @@ classdef HilTest < matlab.unittest.TestCase
             iLast  = find(f.t < stallEnd, 1, 'last');   % 멈추기 전 마지막 프레임
             iFirst = find(f.t > stallEnd, 1);           % 재개 후 첫 프레임
             stopDelay = f.t(iLast) - stallStart;
-            testCase.verifyGreaterThan(stopDelay, 0.8, '너무 일찍 송신이 멈춤 (SWR-32)');
+            % 하한 0.7: CAN 태스크가 보는 last_t는 정지 시작보다 0.05~0.2초 앞선 값
+            % (추론 1회 + Rate Transition 전달 간격)이고 송신은 0.1초 단위라, 정상이어도 0.7~0.95초에 멈춤
+            testCase.verifyGreaterThan(stopDelay, 0.7, '너무 일찍 송신이 멈춤 (SWR-32)');
             testCase.verifyLessThan(stopDelay, 1.15, '1초 뒤에 송신이 멈춰야 함 (SWR-32)');
             testCase.assertNotEmpty(iFirst, '인식이 돌아왔는데 송신이 재개되지 않음');
             testCase.verifyLessThan(f.t(iFirst) - stallEnd, 0.5, '0.5초 안에 재개되어야 함');
@@ -148,6 +153,7 @@ classdef HilTest < matlab.unittest.TestCase
             testCase.assertNotEmpty(f.t, '모델이 없어도 처음에는 송신해야 함');
             testCase.verifyTrue(all(f.status == 0), '모델이 없으면 상태는 0이어야 함');
             % 10초는 첫 프레임부터 셈 (프로그램 시작 → 첫 프레임 약 1.2초는 빼고)
+            testCase.verifyGreaterThan(f.t(end) - f.t(1), 9.7, '10초가 되기 전에 송신이 멈춤 (SWR-34)');
             testCase.verifyLessThan(f.t(end) - f.t(1), 10.2, '첫 프레임부터 10초 뒤 멈춰야 함');
             testCase.verifyLessThan(f.t(end) - t0, 13, '측정이 끝나기 전에 송신이 멈춰 있어야 함');
         end
@@ -216,11 +222,19 @@ function f = readFrames(name)
     f.t = []; f.id = strings(0, 1); f.dlc = []; f.data = zeros(0, 4);
     for line = splitlines(string(out))'
         p = split(strtrim(line));
-        if numel(p) < 8 || p(2) ~= "can1", continue; end   % CAN 프레임 줄만
+        if numel(p) < 4 || p(2) ~= "can1", continue; end   % CAN 프레임 줄만
+        % 길이가 4 byte가 아닌 프레임도 읽음 (버리면 길이 검사가 못 잡음). 없는 byte는 NaN
+        bytes = p(5:end);
+        bytes = bytes(matches(bytes, regexpPattern('[0-9A-Fa-f]{2}')));
+        n = min(numel(bytes), 4);
+        row = nan(1, 4);
+        if n > 0
+            row(1:n) = hex2dec(bytes(1:n))';
+        end
         f.t(end+1, 1)      = str2double(erase(p(1), ["(", ")"]));
         f.id(end+1, 1)     = p(3);
         f.dlc(end+1, 1)    = str2double(erase(p(4), ["[", "]"]));
-        f.data(end+1, :)   = hex2dec(p(5:8))';
+        f.data(end+1, :)   = row;
     end
     f.speed    = f.data(:, 1);   % byte 1 제한속도
     f.detected = f.data(:, 2);   % byte 2 확정 여부
