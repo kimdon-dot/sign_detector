@@ -184,6 +184,7 @@ function f = readFrames(name)
 
     % 측정 원본 남기기: tests/hil/results/<이름>_<시각>.mat
     folder = fullfile(fileparts(mfilename('fullpath')), 'results');
-    file = name + "_" + string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) + ".mat";
+    if ~isfolder(folder), mkdir(folder); end
+    file =name + "_" + string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) + ".mat";
     save(fullfile(folder, file), 'f');
 end
