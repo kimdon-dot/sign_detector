@@ -33,8 +33,11 @@ function processmodel(pm)
         '$DEFAULTOUTPUTDIR$','$ITERATIONARTIFACT$');
 
     %% Define Shared Queries
-    findModels = padv.builtin.query.FindModels(Name="ModelsQuery");
-    findSlModels = padv.builtin.query.FindArtifacts(ArtifactType="sl_model_file");
+    % 쿼리는 기본으로 프로젝트에 안 넣은 파일까지 찾음 → Claude Code worktree(.claude/worktrees)의
+    % 모델 복사본도 잡혀서 같은 코드 생성 폴더에 두 번 쓰다 실패함. 그래서 .claude 아래는 뺌
+    excludePath = ".claude";
+    findModels = padv.builtin.query.FindModels(Name="ModelsQuery", ExcludePath=excludePath);
+    findSlModels = padv.builtin.query.FindArtifacts(ArtifactType="sl_model_file", ExcludePath=excludePath);
     findModelsWithTests = padv.builtin.query.FindModelsWithTestCases(Parent=findModels);
     findTestsForModel = padv.builtin.query.FindTestCasesForModel(Parent=findModels);
 
@@ -42,7 +45,8 @@ function processmodel(pm)
 
     %% Collect Model Maintainability Metrics
     if includeModelMaintainabilityMetricTask
-        mmMetricTask = pm.addTask(padv.builtin.task.CollectMetrics());
+        mmMetricTask = pm.addTask(padv.builtin.task.CollectMetrics( ...
+            IterationQuery=padv.builtin.query.FindDesignModels(ExcludePath=excludePath)));
     end
 
     %% Check modeling standards
@@ -116,7 +120,7 @@ function processmodel(pm)
 
     %% Collect Model Testing Metrics
     if includeModelTestingMetricTask
-        mtMetricTask = pm.addTask(padv.builtin.task.CollectMetrics(Name="ModelTestingMetrics", IterationQuery=padv.builtin.query.FindUnits));
+        mtMetricTask = pm.addTask(padv.builtin.task.CollectMetrics(Name="ModelTestingMetrics", IterationQuery=padv.builtin.query.FindUnits(ExcludePath=excludePath)));
         mtMetricTask.Title = message('padv_spkg:builtin_text:ModelTestingMetricDemoTaskTitle').getString();
         mtMetricTask.Dashboard = "ModelUnitTesting";
         mtMetricTask.ReportName = "$ITERATIONARTIFACT$_ModelTesting";
