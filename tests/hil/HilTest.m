@@ -5,11 +5,12 @@ classdef HilTest < matlab.unittest.TestCase
     %
     % 구성: sign_detector.elf → can0 ═══ 선 ═══ can1 → candump. 시각은 모두 Pi 시계.
     % 배포는 DeployToPi가 먼저 해 둔다고 가정
-
-    properties (Constant)
-        ElfDir   = char(fileparts(hil_elf_path()));   % 프로젝트가 열려 있어야 함
-        ModelDir = '/home/pi/sign_detector_project/best_ncnn_model';
-    end
+    %
+    % Pi에서 할 일(시나리오)은 tests/hil/pi/*.sh에 있고, 여기서는 판정만 함
+    %   1. 시작할 때 tests/hil/pi/*.sh를 Pi의 ~/hil/에 올림
+    %   2. 테스트마다 시나리오 하나를 통째로 실행 (runPiScript)
+    %   3. 스크립트가 찍은 시각 · 값(@이름 값)과 can1 기록으로 판정
+    % Pi에서 직접 돌려 볼 수도 있음: ssh pi → bash ~/hil/stall.sh
 
     methods (TestClassSetup)
         function checkPi(testCase)
@@ -17,30 +18,22 @@ classdef HilTest < matlab.unittest.TestCase
             [status, out] = runOnPi('echo ok');
             testCase.assertEqual(status, 0, ['접속 실패: ' out]);
 
-            % ── 2. 실행 파일 · 모델 폴더가 있는지 ──
-            [status, ~] = runOnPi(['test -f ' HilTest.ElfDir '/sign_detector.elf']);
-            testCase.assertEqual(status, 0, '.elf가 없음 (DeployToPi 먼저)');
-            hidden = [HilTest.ModelDir '_hidden'];
-            runOnPi(['test -d ' hidden ' && mv ' hidden ' ' HilTest.ModelDir]);   % 지난번 noModel 테스트가 숨긴 채 끝났으면 되돌리기
-            [status, ~] = runOnPi(['test -d ' HilTest.ModelDir]);
-            testCase.assertEqual(status, 0, '모델 폴더가 없음');
+            % ── 2. 시나리오 스크립트 올리기 ──
+            uploadPiScripts();
 
-            % ── 3. can0, can1 올리기 ──
-            for can = ["can0", "can1"]
-                runOnPi("ip -br link show " + can + " | grep -q UP || " + canUpCmd(can));
-                [~, out] = runOnPi("ip -br link show " + can);
-                testCase.assertSubstring(out, 'UP', can + "이 UP이 아님 (CAN HAT 확인)");
-            end
+            % ── 3. 실행 파일 · 모델 폴더 확인, can0 · can1 올리기 (check.sh) ──
+            ev = runPiScript("check");
+            testCase.assertEqual(ev.elf,   1, '.elf가 없음 (DeployToPi 먼저)');
+            testCase.assertEqual(ev.model, 1, '모델 폴더가 없음');
+            testCase.assertEqual(ev.can0,  1, 'can0이 UP이 아님 (CAN HAT 확인)');
+            testCase.assertEqual(ev.can1,  1, 'can1이 UP이 아님 (CAN HAT 확인)');
         end
     end
 
     methods (Test, TestTags = {'basic'})
         function normalOperation(testCase)
             % SWR-04 0.1초 주기 · SWR-11 ID/길이 · SWR-31 alive · SWR-34 상태
-            testCase.addTeardown(@stopAll);
-            startApp();
-            pause(60);
-            stopAll();
+            runPiScript("normal");   % 60초
             f = readFrames("normal");
 
             testCase.assertGreaterThan(numel(f.t), 500, '60초 동안 프레임이 너무 적음');
@@ -54,20 +47,11 @@ classdef HilTest < matlab.unittest.TestCase
 
         function periodUnderCpuLoad(testCase)
             % SWR-04: CPU 4코어를 다 써도 0.1초 주기 유지
-            testCase.addTeardown(@stopAll);
-            startApp();
-            pause(5);
-            [~, out] = runOnPi('date +%s.%N && for i in 1 2 3 4; do nohup timeout 55 yes > /dev/null 2>&1 < /dev/null & done');
-            loadStart = str2double(out);
-            [~, out] = runOnPi('pgrep -c -x yes');
-            testCase.verifyEqual(str2double(out), 4, 'CPU 부하(yes 4개)가 시작되지 않음');
-            pause(55);
-            [~, out] = runOnPi('date +%s.%N');
-            loadEnd = str2double(out);
-            stopAll();
+            ev = runPiScript("cpu_load");   % 60초
             f = readFrames("load");
 
-            inLoad = f.t >= loadStart & f.t <= loadEnd;
+            testCase.verifyEqual(ev.yesCount, 4, 'CPU 부하(yes 4개)가 시작되지 않음');
+            inLoad = f.t >= ev.loadStart & f.t <= ev.loadEnd;
             gapMs = diff(f.t(inLoad)) * 1000;
             testCase.verifyGreaterThan(numel(gapMs), 400, '부하 구간 프레임이 너무 적음');
             testCase.verifyEqual(sum(abs(gapMs - 100) > 10), 0, '부하 중 간격이 100±10 ms를 벗어남 (SWR-04)');
@@ -76,12 +60,7 @@ classdef HilTest < matlab.unittest.TestCase
 
         function processingRate(testCase)
             % SWR-21: 10초 평균 15 FPS 이상, 결과 간격 0.2초 이하
-            % ncnn_infer.cpp가 5초마다 남기는 로그: "[ncnn_infer] fps 19.6 infer 47.3 ms max 101 ms n 98"
-            testCase.addTeardown(@stopAll);
-            startApp();
-            pause(30);
-            stopAll();
-            [~, out] = runOnPi('grep -a ''ncnn_infer] fps'' /tmp/hil_app.log');
+            [~, out] = runPiScript("processing_rate");   % 30초, FPS 로그 줄을 출력
             tok = regexp(out, 'fps ([\d.]+) infer [\d.]+ ms max ([\d.]+) ms', 'tokens');
             fps   = cellfun(@(c) str2double(c{1}), tok);
             maxMs = cellfun(@(c) str2double(c{2}), tok);
@@ -95,44 +74,30 @@ classdef HilTest < matlab.unittest.TestCase
         function stallStopsSending(testCase)
             % SWR-32: 인식이 1초 멈추면 송신 중지, 다시 인식하면 재개
             % SWR-31: 안 보낸 동안 alive는 그대로 → 재개 후 1만 증가
-            % /tmp/stall_infer가 있는 동안 ncnn_infer.cpp가 결과를 안 냄
-            testCase.addTeardown(@stopAll);
-            startApp();
-            pause(5);
+            ev = runPiScript("stall");   % 20초
             % 정지 훅은 DeployToPi로 배포한 빌드에만 있음 (-DNCNN_INFER_HIL)
-            [status, ~] = runOnPi('grep -q ''HIL stall hook on'' /tmp/hil_app.log');
-            testCase.assertEqual(status, 0, '인식 정지 훅이 없는 빌드 (DeployToPi로 다시 배포)');
-            [~, out] = runOnPi('touch /tmp/stall_infer && date +%s.%N');
-            stallStart = str2double(out);
-            pause(4);
-            [~, out] = runOnPi('rm -f /tmp/stall_infer && date +%s.%N');
-            stallEnd = str2double(out);
-            pause(11);
-            stopAll();
+            testCase.assertEqual(ev.hook, 1, '인식 정지 훅이 없는 빌드 (DeployToPi로 다시 배포)');
             f = readFrames("stall");
 
-            iLast  = find(f.t < stallEnd, 1, 'last');   % 멈추기 전 마지막 프레임
-            iFirst = find(f.t > stallEnd, 1);           % 재개 후 첫 프레임
-            stopDelay = f.t(iLast) - stallStart;
+            iLast  = find(f.t < ev.stallEnd, 1, 'last');   % 멈추기 전 마지막 프레임
+            iFirst = find(f.t > ev.stallEnd, 1);           % 재개 후 첫 프레임
+            stopDelay = f.t(iLast) - ev.stallStart;
             % 하한 0.7: CAN 태스크가 보는 last_t는 정지 시작보다 0.05~0.2초 앞선 값
             % (추론 1회 + Rate Transition 전달 간격)이고 송신은 0.1초 단위라, 정상이어도 0.7~0.95초에 멈춤
             testCase.verifyGreaterThan(stopDelay, 0.7, '너무 일찍 송신이 멈춤 (SWR-32)');
             testCase.verifyLessThan(stopDelay, 1.15, '1초 뒤에 송신이 멈춰야 함 (SWR-32)');
             testCase.assertNotEmpty(iFirst, '인식이 돌아왔는데 송신이 재개되지 않음');
-            testCase.verifyLessThan(f.t(iFirst) - stallEnd, 0.5, '0.5초 안에 재개되어야 함');
+            testCase.verifyLessThan(f.t(iFirst) - ev.stallEnd, 0.5, '0.5초 안에 재개되어야 함');
             testCase.verifyEqual(mod(f.alive(iFirst) - f.alive(iLast), 256), 1, '안 보낸 동안 alive가 늘어남 (SWR-31)');
         end
 
         function bootStatus(testCase)
             % SWR-34: 시작 직후부터 송신, 상태는 0(준비 중) → 1(정상)로만 바뀜
-            testCase.addTeardown(@stopAll);
-            t0 = startApp();
-            pause(15);
-            stopAll();
+            ev = runPiScript("boot");   % 15초
             f = readFrames("boot");
 
             testCase.assertNotEmpty(f.t, '시작 후 프레임이 없음');
-            testCase.verifyLessThan(f.t(1) - t0, 2, '시작 후 2초 안에 송신해야 함');
+            testCase.verifyLessThan(f.t(1) - ev.t0, 2, '시작 후 2초 안에 송신해야 함');
             testCase.verifyTrue(all(diff(f.status) >= 0), '상태가 1에서 0으로 돌아감');
             testCase.verifyEqual(f.status(end), 1, '첫 인식 후 상태 1이어야 함 (SWR-34)');
         end
@@ -141,13 +106,7 @@ classdef HilTest < matlab.unittest.TestCase
     methods (Test, TestTags = {'fault'})
         function noModelStopsAfterBootTimeout(testCase)
             % SWR-34: 모델 파일을 못 읽으면 상태 0으로 보내다가 10초 뒤 멈춤
-            hidden = [HilTest.ModelDir '_hidden'];
-            runOnPi(['mv ' HilTest.ModelDir ' ' hidden]);                          % 모델 폴더 숨기기
-            testCase.addTeardown(@() runOnPi(['mv ' hidden ' ' HilTest.ModelDir]));  % 끝나면 되돌리기
-            testCase.addTeardown(@stopAll);
-            t0 = startApp();
-            pause(15);
-            stopAll();
+            ev = runPiScript("no_model");   % 15초, 끝나면 모델 폴더를 되돌림
             f = readFrames("nomodel");
 
             testCase.assertNotEmpty(f.t, '모델이 없어도 처음에는 송신해야 함');
@@ -155,35 +114,23 @@ classdef HilTest < matlab.unittest.TestCase
             % 10초는 첫 프레임부터 셈 (프로그램 시작 → 첫 프레임 약 1.2초는 빼고)
             testCase.verifyGreaterThan(f.t(end) - f.t(1), 9.7, '10초가 되기 전에 송신이 멈춤 (SWR-34)');
             testCase.verifyLessThan(f.t(end) - f.t(1), 10.2, '첫 프레임부터 10초 뒤 멈춰야 함');
-            testCase.verifyLessThan(f.t(end) - t0, 13, '측정이 끝나기 전에 송신이 멈춰 있어야 함');
+            testCase.verifyLessThan(f.t(end) - ev.t0, 13, '측정이 끝나기 전에 송신이 멈춰 있어야 함');
         end
 
         function canFailureKeepsRunning(testCase)
             % SWR-33: can0이 내려가도 프로그램은 계속 돌고, 다시 올라오면 0.5초 안에 재개
             % SWR-31: 못 보낸 동안에도 alive는 증가 → 재개 후 alive가 건너뜀
-            testCase.addTeardown(@stopAll);
-            testCase.addTeardown(@() runOnPi(canUpCmd("can0")));   % 중간에 실패해도 can0 되살리기
-            startApp();
-            pause(5);
-            [~, out] = runOnPi('sudo ip link set can0 down && date +%s.%N');
-            canDown = str2double(out);
-            pause(5);
-            [status, ~] = runOnPi('pgrep sign_detector');
-            aliveWhileDown = (status == 0);
-            [~, out] = runOnPi("date +%s.%N && " + canUpCmd("can0"));   % up 직전 시각
-            canUp = str2double(out);
-            pause(10);
-            stopAll();
+            ev = runPiScript("can_failure");   % 20초, 끝나면 can0을 되살림
             f = readFrames("canfail");
 
-            testCase.verifyTrue(aliveWhileDown, 'can0 down 중 프로그램이 죽음 (SWR-33)');
-            testCase.verifyEqual(sum(f.t > canDown + 0.2 & f.t < canUp), 0, 'can0 down 동안 송신이 없어야 함');
-            iFirst = find(f.t > canDown + 0.2, 1);   % 재개 후 첫 프레임
+            testCase.verifyEqual(ev.appAlive, 1, 'can0 down 중 프로그램이 죽음 (SWR-33)');
+            testCase.verifyEqual(sum(f.t > ev.canDown + 0.2 & f.t < ev.canUp), 0, 'can0 down 동안 송신이 없어야 함');
+            iFirst = find(f.t > ev.canDown + 0.2, 1);   % 재개 후 첫 프레임
             testCase.assertNotEmpty(iFirst, 'can0 up 후 송신이 재개되지 않음 (SWR-33)');
-            testCase.verifyLessThan(f.t(iFirst) - canUp, 0.5, 'can0 up 후 0.5초 안에 재개되어야 함 (SWR-33)');
-            testCase.verifyGreaterThan(sum(f.t > canUp), 50, '재개 후 계속 송신해야 함');
+            testCase.verifyLessThan(f.t(iFirst) - ev.canUp, 0.5, 'can0 up 후 0.5초 안에 재개되어야 함 (SWR-33)');
+            testCase.verifyGreaterThan(sum(f.t > ev.canUp), 50, '재개 후 계속 송신해야 함');
             skipped = mod(f.alive(iFirst) - f.alive(iFirst - 1), 256) - 1;
-            downCycles = (canUp - canDown) / 0.1;
+            downCycles = (ev.canUp - ev.canDown) / 0.1;
             testCase.verifyGreaterThan(skipped, 0.8 * downCycles, '못 보낸 동안 alive가 늘어야 함 (SWR-31)');
         end
     end
@@ -191,26 +138,20 @@ end
 
 % ───────────────────────── 도우미 함수 ─────────────────────────
 
-function t0 = startApp()
-    % 이전 실행 정리 → can1 기록 시작 → 프로그램 시작. t0 = 시작 직전 Pi 시각
-    stopAll();
-    runOnPi('rm -f /tmp/hil_can.log /tmp/hil_app.log');
-    runOnPi('nohup stdbuf -oL candump -t a can1 > /tmp/hil_can.log 2>&1 < /dev/null &');
-    % sudo: 생성 코드가 실시간 스케줄링을 씀
-    % ';'로 나눔: 'A && B &'는 줄 전체가 백그라운드가 돼서 ssh가 안 돌아옴
-    [~, out] = runOnPi(['date +%s.%N; cd ' HilTest.ElfDir '; ' ...
-        'sudo nohup ./sign_detector.elf > /tmp/hil_app.log 2>&1 < /dev/null &']);
-    t0 = str2double(out);
-end
+function uploadPiScripts()
+    % tests/hil/pi/*.sh → Pi의 ~/hil/ (매번 올려서 PC 쪽 파일이 항상 원본)
+    % env.sh도 같이 올림: 실행 파일 폴더는 PC의 코드 생성 폴더에 따라 달라서 여기서 만듦
+    elfDir = string(fileparts(hil_elf_path()));   % "~/MATLAB_ws/R2026b/..." (프로젝트가 열려 있어야 함)
+    envFile = fullfile(tempdir, 'env.sh');
+    writelines("ELF_DIR=""$HOME/" + extractAfter(elfDir, "~/") + """", envFile, LineEnding = "\n");
 
-function stopAll()
-    % 프로그램 · candump · CPU 부하 · 인식 정지 파일 정리
-    % (프로세스 이름이 15자에서 잘려 'sign_detector.elf'로는 못 찾음)
-    runOnPi('sudo pkill sign_detector; sleep 0.5; pkill candump; pkill -x yes; rm -f /tmp/stall_infer');
-end
-
-function cmd = canUpCmd(can)
-    cmd = "sudo ip link set " + can + " up type can bitrate 500000 restart-ms 100";
+    files = [dir(fullfile(fileparts(mfilename('fullpath')), 'pi', '*.sh')); dir(envFile)];
+    paths = join("""" + string(fullfile({files.folder}, {files.name})) + """", " ");
+    runOnPi('mkdir -p ~/hil');
+    [status, out] = system("scp -q -o BatchMode=yes -o ConnectTimeout=5 " + paths + " pi:hil/");
+    if status ~= 0
+        error('Pi에 시나리오 스크립트를 못 올림: %s', out);
+    end
 end
 
 function f = readFrames(name)

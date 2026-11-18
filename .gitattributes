@@ -24,6 +24,9 @@
 ## MATLAB Project metadata files use LF line endings
 /resources/project/**/*.xml text eol=lf
 
+## Pi에서 도는 셸 스크립트: Windows에서 받아도 LF 유지 (CRLF면 bash가 실패)
+*.sh text eol=lf
+
 ## Other common binary file types
 *.docx binary
 *.exe binary

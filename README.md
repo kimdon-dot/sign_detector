@@ -132,7 +132,9 @@ sign_detector/
 │   ├── <모델>_inputs/             이미지 입력 (.mat, 시트별)
 │   └── hil/
 │       ├── HilTest.m              HIL 테스트 7개 (요구사항별 판정)
-│       ├── runOnPi.m              SSH로 Pi에서 명령 실행 (HilTest가 씀)
+│       ├── pi/                    Pi에서 돌리는 시나리오 스크립트 (.sh, 테스트 1개 = 스크립트 1개)
+│       ├── runPiScript.m          Pi에서 시나리오 스크립트 실행, "@이름 값" 줄을 구조체로
+│       ├── runOnPi.m              SSH로 Pi에서 명령 실행
 │       ├── DeployToPi.m           Process Advisor 태스크: Pi 빌드 · 배포
 │       ├── RunHilTests.m          Process Advisor 태스크: HIL 테스트 실행
 │       └── results/               HIL 측정 원본 (.mat, 검증 근거)
@@ -187,8 +189,11 @@ sign_detector/
 ```
  Raspberry Pi
    sign_detector.elf ──▶ can0 ═══ 선 ═══ can1 ──▶ candump -t a (수신 기록)
-   시나리오(HilTest.m가 runOnPi로 SSH 실행): CPU 부하, can0 down/up, 모델 파일 숨김, 인식 정지 파일
+   시나리오(tests/hil/pi/*.sh): CPU 부하, can0 down/up, 모델 파일 숨김, 인식 정지 파일
 ```
+
+- Pi에서 할 일은 `tests/hil/pi/`의 셸 스크립트에, 판정은 `HilTest.m`에 나눠 두었습니다. HilTest가 시작할 때 스크립트를 Pi의 `~/hil/`에 올리고, 테스트마다 스크립트 하나를 통째로 실행합니다(`runPiScript`). 스크립트는 판정에 쓸 시각 · 값을 `@이름 값` 줄로 찍습니다(예: `@canDown 1794208619.19`).
+- 스크립트는 Pi에서 직접 돌려 볼 수도 있습니다: `ssh pi` → `bash ~/hil/stall.sh` (이후 `/tmp/hil_can.log`에 can1 기록).
 
 - 시각은 모두 Pi 시계로 잽니다(`candump -t a`, `date +%s.%N`). 네트워크 지연이 섞이지 않습니다.
 - 처리 속도와 인식 정지는 `ncnn_infer.cpp`의 Pi 빌드 전용 기능을 씁니다: 5초마다 FPS 로그, `/tmp/stall_infer`가 있는 동안 결과 안 냄.
@@ -234,7 +239,7 @@ sign_detector/
 - NCNN `/usr/local/lib/libncnn.a`, `/usr/local/include/ncnn/`, 그리고 `pi/libcamera_compat.h`를 `/usr/local/include/`에 복사
 - `cache/best_ncnn_model/`을 `/home/pi/sign_detector_project/best_ncnn_model/`로 복사
 - can0(송신) ↔ can1(수신)을 선으로 연결
-- MATLAB에 `raspberrypi` 연결 정보 저장 (배포용), PC에서 `ssh pi`가 비밀번호 없이 접속 (HIL의 `runOnPi`용)
+- MATLAB에 `raspberrypi` 연결 정보 저장 (배포용), PC에서 `ssh pi` · `scp`가 비밀번호 없이 접속 (HIL 스크립트 업로드 · 실행용)
 
 ### 전체 파이프라인 (Process Advisor)
 
