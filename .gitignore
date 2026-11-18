@@ -12,8 +12,9 @@ cache/sign_detector/
 # HIL 측정 원본 (HilTest가 테스트마다 .mat로 남김)
 cache/hil_results/
 
-# Windows용 NCNN 사전 빌드 라이브러리 (외부 배포물, README의 "준비" 참고)
+# PC용 NCNN 사전 빌드 라이브러리 (외부 배포물, README의 "빠른 시작" 2번 참고)
 cache/ncnn_win/
+cache/ncnn_linux/
 
 # Process Advisor 실행 결과 (리포트, 로그, JUnit)
 PA_Results/

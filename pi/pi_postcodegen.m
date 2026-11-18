@@ -2,7 +2,7 @@ function pi_postcodegen(buildInfo, sources)
 % 코드 생성 후 Pi 빌드 정보를 고침. 모델 설정 PostCodeGenCommand에서 보드 기본값 뒤에 붙여 부름:
 %   codertarget.postCodeGenHookCommand(h); pi_postcodegen(buildInfo)
 % sources: 넣을 C++ 소스. "ncnn" = ncnn_infer.cpp (기본), "can" = 예전 can_tx.cpp (지금은 안 씀)
-% 공통: NCNN 정적 링크 + -fopenmp, libcamera 0.7 대응(-std=c++20, libcamera_compat.h)
+% 공통: NCNN 정적 링크 + -fopenmp, libcamera 0.7 대응(-std=c++20, libcamera_compat.h), -DNCNN_INFER_PI
 % 환경 변수 SIGN_DETECTOR_HIL=1이면 -DNCNN_INFER_HIL 추가 (DeployToPi가 빌드 동안만 설정)
 % 파일은 빌드 폴더로 복사해야 Pi로 같이 넘어감
 if nargin < 2
@@ -23,7 +23,8 @@ for name = string(sources)
             error('pi_postcodegen: 모르는 소스 "%s" (ncnn, can 중 하나)', name);
     end
 end
-flags = '-std=c++20 -include libcamera_compat.h';
+% -DNCNN_INFER_PI: ncnn_infer.cpp의 Pi 전용 코드를 켬 (Linux PC 시뮬레이션과 구분)
+flags = '-std=c++20 -include libcamera_compat.h -DNCNN_INFER_PI';
 if strcmp(getenv('SIGN_DETECTOR_HIL'), '1')
     % HIL 배포(DeployToPi)에서만: ncnn_infer.cpp의 인식 정지 훅을 켬. 일반 빌드에는 넣지 않음
     flags = [flags ' -DNCNN_INFER_HIL'];

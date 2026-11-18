@@ -7,14 +7,19 @@
 #include <string.h>
 #include <string>
 #include <vector>
-#ifdef __linux__
+/* Pi 전용 코드 (코어 지정, 카메라 정지 감지, 처리 속도 로그, HIL 훅)는 Pi 빌드에서만 켬.
+ * pi_postcodegen이 Pi 빌드에 -DNCNN_INFER_PI를 붙임. Linux PC 시뮬레이션에는 없음 (__linux__만으로는 구분 안 됨) */
+#if defined(__linux__) && defined(NCNN_INFER_PI)
+#define NCNN_ON_PI 1
+#endif
+#ifdef NCNN_ON_PI
 #include <sched.h>
 #include <time.h>
 #include <unistd.h>
 #endif
 
 /* Pi: /usr/local/include (gcc 기본 경로. -I로 넣으면 MATLAB이 원격 폴더 경로로 바꿔 버림)
- * PC: unit_recognize의 Simulation Target > Include directories */
+ * PC: unit_recognize의 Simulation Target > Include directories (ncnn_sim_paths.m) */
 #include <ncnn/cpu.h>
 #include <ncnn/net.h>
 
@@ -38,7 +43,7 @@ static int g_state = 0;    /* 모델 파일: 0 읽기 전, 1 읽음, -1 읽기 �
 static int g_threads = 1;  /* 추론 스레드 수 */
 static int g_pinned = 0;   /* 추론 스레드 코어 지정을 했는지 */
 
-#ifdef __linux__
+#ifdef NCNN_ON_PI
 /* HIL용 (Pi에서만)
  * 1) 처리 속도 로그 (SWR-21): 5초마다 "[ncnn_infer] fps 19.6 infer 47.3 ms max 101 ms n 98"
  *    (infer: 추론 1회 평균, max: 연속한 두 결과 사이 최대 간격, n: 추론 수)
@@ -107,7 +112,7 @@ static void fps_tick(double t_start, double t_end)
 /* NCNN이 쓸 코어 범위와 스레드 수 (코어는 바꾸지 않음) */
 static void cpu_range(long *first, long *ncpu, int *threads)
 {
-#ifdef __linux__
+#ifdef NCNN_ON_PI
     *ncpu = sysconf(_SC_NPROCESSORS_ONLN);
     *first = (*ncpu > NCNN_INFER_FIRST_CPU) ? NCNN_INFER_FIRST_CPU : 0;
     *threads = (int)(*ncpu - *first);
@@ -136,7 +141,7 @@ static int load_files(void)
         return -1;
     }
     (void)printf("[ncnn_infer] model %s, %d threads on cpu %ld-%ld (of %ld)\n", dir.c_str(), g_threads, first, ncpu - 1, ncpu);
-#if defined(__linux__) && defined(NCNN_INFER_HIL)
+#if defined(NCNN_ON_PI) && defined(NCNN_INFER_HIL)
     (void)printf("[ncnn_infer] HIL stall hook on (%s)\n", STALL_FILE);   /* HilTest가 이 줄로 훅이 있는 빌드인지 확인 */
 #endif
     (void)fflush(stdout);
@@ -146,7 +151,7 @@ static int load_files(void)
 /* 추론 스레드에서 첫 호출 때 한 번: 이 스레드를 코어 1~끝으로 옮김 */
 static void pin_infer_thread(void)
 {
-#ifdef __linux__
+#ifdef NCNN_ON_PI
     /* Simulink 시작 코드가 프로세스를 코어 0에 고정하므로, OpenMP 스레드가 생기기 전에 이 스레드를 옮김
      * (이후 OpenMP 스레드가 물려받음). 다른 Simulink 스레드는 코어 0에 남음.
      * ncnn_infer_preload(주 스레드)로 옮기면 안 됨: 그 뒤 생기는 모든 스레드가 물려받음 */
@@ -191,7 +196,7 @@ int ncnn_infer(const unsigned char *rgb, float *y)
     if (g_state < 0) {
         return -1;
     }
-#ifdef __linux__
+#ifdef NCNN_ON_PI
 #ifdef NCNN_INFER_HIL
     if (access(STALL_FILE, F_OK) == 0) {
         return -4;   /* 인식 정지 시험 */
@@ -239,7 +244,7 @@ int ncnn_infer(const unsigned char *rgb, float *y)
             y[k + ROWS * a] = row[a];
         }
     }
-#ifdef __linux__
+#ifdef NCNN_ON_PI
     fps_tick(t_start, mono_now());
 #endif
     return 0;

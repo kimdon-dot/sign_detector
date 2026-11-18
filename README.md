@@ -61,7 +61,7 @@ flowchart LR
 - **코어 분리**: 추론은 코어 1~3, CAN 송신은 코어 0.
 - **태스크 간 전달**: 추론 스텝이 끝날 때마다 최신 값 4개(제한속도 · 확정 여부 · 준비 · 마지막 결과 시각)를 한 묶음으로 보호 버퍼에 넘기고, CAN 태스크는 그 버퍼만 읽습니다. 추론이 주기(0.05 s)를 넘겨도 값이 밀리지 않습니다 (Rate Transition, 결정적 전달 끔).
 - **결과가 있는 프레임만 확정에 사용**: `unit_decide`는 추론이 성공한 프레임(`ok = 1`)에서만 실행됩니다 (`Decide_if_ok`). 결과가 1초 이상 끊기면 기록을 비우고 다시 셉니다 (SWR-02).
-- **카메라 정지 감지**: Pi 카메라 블록은 새 프레임이 없으면 직전 프레임을 그대로 돌려주므로, 완전히 같은 영상이 3번 이어지면 결과 없음으로 처리합니다 (`ncnn_infer.cpp`, Pi에서만). 1초 이어지면 인식 정지가 됩니다 (SWR-32).
+- **카메라 정지 감지**: Pi 카메라 블록은 새 프레임이 없으면 직전 프레임을 그대로 돌려주므로, 완전히 같은 영상이 3번 이어지면 결과 없음으로 처리합니다 (`ncnn_infer.cpp`, Pi 빌드에서만: `-DNCNN_INFER_PI`). 1초 이어지면 인식 정지가 됩니다 (SWR-32).
 - **시뮬레이션 / Pi 자동 전환**: Camera와 CAN Tx는 Variant Subsystem이라, 시뮬레이션에서는 포트 · 신호를, 코드 생성에서는 Pi 블록을 씁니다.
 - **모델 미리 읽기**: 초기화 때 `ncnn_infer_preload()`가 NCNN 모델을 읽어 둬서 첫 추론이 송신 주기를 밀지 않습니다.
 
@@ -95,7 +95,9 @@ Pi 없이 PC에서 MIL 테스트까지 돌려 보는 순서입니다.
    ```bash
    git clone https://github.com/kimdon-dot/sign_detector.git
    ```
-2. [Tencent/ncnn 릴리스 20261020](https://github.com/Tencent/ncnn/releases/tag/20261020)에서 `ncnn-20261020-windows-vs2026.zip`을 받아 `cache/ncnn_win/` 아래에 풉니다 (PC 시뮬레이션용, [폴더 구조](#폴더-구조) 참고).
+2. [Tencent/ncnn 릴리스 20261020](https://github.com/Tencent/ncnn/releases/tag/20261020)에서 PC용 NCNN을 받아 풉니다 (PC 시뮬레이션 · 코드 생성용, [폴더 구조](#폴더-구조) 참고). 경로는 `pi/ncnn/ncnn_sim_paths.m`이 OS에 맞게 고릅니다.
+   - Windows: `ncnn-20261020-windows-vs2026.zip` → `cache/ncnn_win/`
+   - Ubuntu 24.04: `ncnn-20261020-ubuntu-2404.zip` → `cache/ncnn_linux/` (OpenMP 런타임 `libgomp1` 필요, gcc와 같이 설치됨)
 3. MATLAB R2026b에서 프로젝트를 엽니다. 시작 스크립트가 NCNN 모델 폴더(`cache/best_ncnn_model`)를 자동으로 설정합니다.
    ```matlab
    openProject('sign_detector.prj');
@@ -107,7 +109,8 @@ Pi 없이 PC에서 MIL 테스트까지 돌려 보는 순서입니다.
    ```
    엑셀에서 테스트 케이스를 바꿨으면 `make_unit_cases('tests/unit_decide.xlsx', 'tests/unit_decide.mldatx')`로 테스트 파일을 다시 만듭니다.
 
-> `unit_decide`, `unit_can_sender`는 NCNN 없이도 돌아갑니다. `unit_recognize`와 최상위 `sign_detector` 테스트는 2번이 필요합니다.
+> `unit_decide`, `unit_can_sender`는 NCNN 없이도 돌아갑니다. `unit_recognize`와 최상위 `sign_detector`는 테스트뿐 아니라 코드 생성에도 2번이 필요합니다 (코드 생성도 모델을 컴파일하면서 PC용 NCNN 경로를 검사함).
+> `ncnn_infer.cpp`를 고쳤는데 시뮬레이션 결과가 그대로면 `cache/sign_detector/slprj/_slcc`를 지우고 다시 돌립니다 (예전에 빌드한 사용자 지정 코드를 계속 씀).
 
 ---
 
@@ -122,7 +125,8 @@ sign_detector/
 ├── checks/model_standards.json  Model Advisor 검사 목록
 ├── pi/
 │   ├── ncnn/ncnn_infer.cpp/.h     NCNN 추론 (Pi · PC 시뮬레이션 공통), HIL 측정용 로그 · 훅
-│   ├── pi_postcodegen.m           코드 생성 후 Pi 빌드 정보 수정 (NCNN 링크, C++20)
+│   ├── ncnn/ncnn_sim_paths.m      PC용 NCNN 경로 (Windows / Linux, unit_recognize 사용자 지정 코드에서 부름)
+│   ├── pi_postcodegen.m           코드 생성 후 Pi 빌드 정보 수정 (NCNN 링크, C++20, -DNCNN_INFER_PI)
 │   └── libcamera_compat.h         Pi 카메라 블록과 libcamera 0.7 호환
 ├── tests/
 │   ├── <모델>.xlsx                테스트 케이스 정의 (시트 1개 = 테스트 1개, 시각별 입력 · 기대값)
@@ -139,6 +143,7 @@ sign_detector/
 │   ├── best_ncnn_model/           학습된 YOLO26n NCNN 모델 (model.ncnn.param/.bin)   ← Git 포함
 │   ├── dataset/raw/               인식 테스트용 샘플 이미지                           ← Git 포함
 │   ├── hil_results/               HIL 측정 원본 (.mat, 테스트마다 생성)              ← Git 제외
+│   ├── ncnn_linux/                Linux용 NCNN 라이브러리 (직접 받기)                 ← Git 제외
 │   ├── ncnn_win/                  Windows용 NCNN 라이브러리 (직접 받기)               ← Git 제외
 │   └── sign_detector/             Simulink 캐시 · 코드 생성 · 빌드 결과 (자동 생성)    ← Git 제외
 ├── PA_Results/                  Process Advisor 결과 (자동 생성)                      ← Git 제외
