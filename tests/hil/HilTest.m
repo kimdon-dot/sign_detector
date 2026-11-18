@@ -6,24 +6,16 @@ classdef HilTest < matlab.unittest.TestCase
     % 구성: sign_detector.elf → can0 ═══ 선 ═══ can1 → candump. 시각은 모두 Pi 시계.
     % 배포는 DeployToPi가 먼저 해 둔다고 가정
     %
-    % Pi에서 할 일(시나리오)은 tests/hil/pi/*.sh에 있고, 여기서는 판정만 함
-    %   1. 시작할 때 tests/hil/pi/*.sh를 Pi의 ~/hil/에 올림
-    %   2. 테스트마다 시나리오 하나를 통째로 실행 (runPiScript)
-    %   3. 스크립트가 찍은 시각 · 값(@이름 값)과 can1 기록으로 판정
-    % Pi에서 직접 돌려 볼 수도 있음: ssh pi → bash ~/hil/stall.sh
+    % Pi에서 할 일(시나리오)은 hil.sh에 있고, 여기서는 판정만 함
+    %   1. 시작할 때 hil.sh를 Pi의 ~/sign_detector_project/에 올림
+    %   2. 테스트마다 시나리오 하나를 통째로 실행 (runPi)
+    %   3. 출력된 "@이름 값" 줄과 can1 기록으로 판정
 
     methods (TestClassSetup)
-        function checkPi(testCase)
-            % ── 1. 접속 ──
-            [status, out] = runOnPi('echo ok');
-            testCase.assertEqual(status, 0, ['접속 실패: ' out]);
-
-            % ── 2. 시나리오 스크립트 올리기 ──
-            uploadPiScripts();
-
-            % ── 3. 실행 파일 · 모델 폴더 확인, can0 · can1 올리기 (check.sh) ──
-            ev = runPiScript("check");
-            testCase.assertEqual(ev.elf,   1, '.elf가 없음 (DeployToPi 먼저)');
+        function preparePi(testCase)
+            uploadScript();
+            [ev, out] = runPi("prepare");   % 정리, can0 · can1 올리기, 실행 파일 · 모델 폴더 확인
+            testCase.assertEqual(ev.elf,   1, ['.elf가 없음 (DeployToPi 먼저). ' out]);
             testCase.assertEqual(ev.model, 1, '모델 폴더가 없음');
             testCase.assertEqual(ev.can0,  1, 'can0이 UP이 아님 (CAN HAT 확인)');
             testCase.assertEqual(ev.can1,  1, 'can1이 UP이 아님 (CAN HAT 확인)');
@@ -33,8 +25,8 @@ classdef HilTest < matlab.unittest.TestCase
     methods (Test, TestTags = {'basic'})
         function normalOperation(testCase)
             % SWR-04 0.1초 주기 · SWR-11 ID/길이 · SWR-31 alive · SWR-34 상태
-            runPiScript("normal");   % 60초
-            f = readFrames("normal");
+            [~, out] = runPi("normal");   % 60초
+            f = readFrames(out, "normal");
 
             testCase.assertGreaterThan(numel(f.t), 500, '60초 동안 프레임이 너무 적음');
             testCase.verifyEqual(unique(f.id), "100", 'CAN ID는 0x100 (SWR-11)');
@@ -47,8 +39,8 @@ classdef HilTest < matlab.unittest.TestCase
 
         function periodUnderCpuLoad(testCase)
             % SWR-04: CPU 4코어를 다 써도 0.1초 주기 유지
-            ev = runPiScript("cpu_load");   % 60초
-            f = readFrames("load");
+            [ev, out] = runPi("cpu_load");   % 60초
+            f = readFrames(out, "load");
 
             testCase.verifyEqual(ev.yesCount, 4, 'CPU 부하(yes 4개)가 시작되지 않음');
             inLoad = f.t >= ev.loadStart & f.t <= ev.loadEnd;
@@ -60,7 +52,7 @@ classdef HilTest < matlab.unittest.TestCase
 
         function processingRate(testCase)
             % SWR-21: 10초 평균 15 FPS 이상, 결과 간격 0.2초 이하
-            [~, out] = runPiScript("processing_rate");   % 30초, FPS 로그 줄을 출력
+            [~, out] = runPi("processing_rate");   % 30초, FPS 로그 줄을 출력
             tok = regexp(out, 'fps ([\d.]+) infer [\d.]+ ms max ([\d.]+) ms', 'tokens');
             fps   = cellfun(@(c) str2double(c{1}), tok);
             maxMs = cellfun(@(c) str2double(c{2}), tok);
@@ -74,10 +66,10 @@ classdef HilTest < matlab.unittest.TestCase
         function stallStopsSending(testCase)
             % SWR-32: 인식이 1초 멈추면 송신 중지, 다시 인식하면 재개
             % SWR-31: 안 보낸 동안 alive는 그대로 → 재개 후 1만 증가
-            ev = runPiScript("stall");   % 20초
+            [ev, out] = runPi("stall");   % 20초
             % 정지 훅은 DeployToPi로 배포한 빌드에만 있음 (-DNCNN_INFER_HIL)
             testCase.assertEqual(ev.hook, 1, '인식 정지 훅이 없는 빌드 (DeployToPi로 다시 배포)');
-            f = readFrames("stall");
+            f = readFrames(out, "stall");
 
             iLast  = find(f.t < ev.stallEnd, 1, 'last');   % 멈추기 전 마지막 프레임
             iFirst = find(f.t > ev.stallEnd, 1);           % 재개 후 첫 프레임
@@ -93,8 +85,8 @@ classdef HilTest < matlab.unittest.TestCase
 
         function bootStatus(testCase)
             % SWR-34: 시작 직후부터 송신, 상태는 0(준비 중) → 1(정상)로만 바뀜
-            ev = runPiScript("boot");   % 15초
-            f = readFrames("boot");
+            [ev, out] = runPi("boot");   % 15초
+            f = readFrames(out, "boot");
 
             testCase.assertNotEmpty(f.t, '시작 후 프레임이 없음');
             testCase.verifyLessThan(f.t(1) - ev.t0, 2, '시작 후 2초 안에 송신해야 함');
@@ -106,8 +98,8 @@ classdef HilTest < matlab.unittest.TestCase
     methods (Test, TestTags = {'fault'})
         function noModelStopsAfterBootTimeout(testCase)
             % SWR-34: 모델 파일을 못 읽으면 상태 0으로 보내다가 10초 뒤 멈춤
-            ev = runPiScript("no_model");   % 15초, 끝나면 모델 폴더를 되돌림
-            f = readFrames("nomodel");
+            [ev, out] = runPi("no_model");   % 15초, 끝나면 모델 폴더를 되돌림
+            f = readFrames(out, "nomodel");
 
             testCase.assertNotEmpty(f.t, '모델이 없어도 처음에는 송신해야 함');
             testCase.verifyTrue(all(f.status == 0), '모델이 없으면 상태는 0이어야 함');
@@ -120,8 +112,8 @@ classdef HilTest < matlab.unittest.TestCase
         function canFailureKeepsRunning(testCase)
             % SWR-33: can0이 내려가도 프로그램은 계속 돌고, 다시 올라오면 0.5초 안에 재개
             % SWR-31: 못 보낸 동안에도 alive는 증가 → 재개 후 alive가 건너뜀
-            ev = runPiScript("can_failure");   % 20초, 끝나면 can0을 되살림
-            f = readFrames("canfail");
+            [ev, out] = runPi("can_failure");   % 20초, 끝나면 can0을 되살림
+            f = readFrames(out, "canfail");
 
             testCase.verifyEqual(ev.appAlive, 1, 'can0 down 중 프로그램이 죽음 (SWR-33)');
             testCase.verifyEqual(sum(f.t > ev.canDown + 0.2 & f.t < ev.canUp), 0, 'can0 down 동안 송신이 없어야 함');
@@ -137,29 +129,40 @@ classdef HilTest < matlab.unittest.TestCase
 end
 
 % ───────────────────────── 도우미 함수 ─────────────────────────
+% PC에서 'ssh pi' · 'scp'가 비밀번호 없이 접속돼야 함
 
-function uploadPiScripts()
-    % tests/hil/pi/*.sh → Pi의 ~/hil/ (매번 올려서 PC 쪽 파일이 항상 원본)
-    % env.sh도 같이 올림: 실행 파일 폴더는 PC의 코드 생성 폴더에 따라 달라서 여기서 만듦
-    elfDir = string(fileparts(hil_elf_path()));   % "~/MATLAB_ws/R2026b/..." (프로젝트가 열려 있어야 함)
-    envFile = fullfile(tempdir, 'env.sh');
-    writelines("ELF_DIR=""$HOME/" + extractAfter(elfDir, "~/") + """", envFile, LineEnding = "\n");
+function uploadScript()
+    % hil.sh → Pi (매번 올려서 PC 쪽 파일이 항상 원본)
+    src = fullfile(fileparts(mfilename('fullpath')), 'hil.sh');
+    piCommand("scp", """" + src + """ pi:sign_detector_project/hil.sh");
+end
 
-    files = [dir(fullfile(fileparts(mfilename('fullpath')), 'pi', '*.sh')); dir(envFile)];
-    paths = join("""" + string(fullfile({files.folder}, {files.name})) + """", " ");
-    runOnPi('mkdir -p ~/hil');
-    [status, out] = system("scp -q -o BatchMode=yes -o ConnectTimeout=5 " + paths + " pi:hil/");
-    if status ~= 0
-        error('Pi에 시나리오 스크립트를 못 올림: %s', out);
+function [ev, out] = runPi(scenario)
+    % Pi에서 hil.sh의 시나리오 하나 실행
+    %   ev  : "@이름 값" 줄 → ev.이름 (숫자)
+    %   out : 출력 전체 (can1 기록, FPS 로그 등)
+    out = piCommand("ssh", "pi ""bash sign_detector_project/hil.sh " + scenario + """");
+    ev = struct();
+    for t = regexp(out, '^@(\w+) (\S+)', 'tokens', 'lineanchors')
+        ev.(t{1}{1}) = str2double(t{1}{2});
     end
 end
 
-function f = readFrames(name)
-    % candump -t a 한 줄: " (1794208619.192621)  can1  100   [4]  00 00 2F 01"
-    [status, out] = runOnPi('cat /tmp/hil_can.log');
-    if status ~= 0
-        error('candump 기록을 못 읽음: %s', out);   % 오류 문장을 프레임으로 읽지 않게
+function out = piCommand(tool, args)
+    % ssh / scp 실행. 접속 실패(255)면 3번까지 다시 시도, 그래도 실패하면 오류
+    cmd = tool + " -o BatchMode=yes -o ConnectTimeout=5 " + args;
+    for attempt = 1:3
+        [status, out] = system(cmd);
+        if status ~= 255, break; end
+        pause(1);
     end
+    if status ~= 0
+        error('Pi 명령 실패 (종료 코드 %d): %s\n%s', status, cmd, strtrim(out));
+    end
+end
+
+function f = readFrames(out, name)
+    % hil.sh가 출력한 candump -t a 줄: " (1794208619.192621)  can1  100   [4]  00 00 2F 01"
     f.t = []; f.id = strings(0, 1); f.dlc = []; f.data = zeros(0, 4);
     for line = splitlines(string(out))'
         p = split(strtrim(line));
@@ -185,6 +188,6 @@ function f = readFrames(name)
     % 측정 원본 남기기: tests/hil/results/<이름>_<시각>.mat
     folder = fullfile(fileparts(mfilename('fullpath')), 'results');
     if ~isfolder(folder), mkdir(folder); end
-    file =name + "_" + string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) + ".mat";
+    file = name + "_" + string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) + ".mat";
     save(fullfile(folder, file), 'f');
 end

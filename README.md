@@ -132,9 +132,8 @@ sign_detector/
 │   ├── <모델>_inputs/             이미지 입력 (.mat, 시트별)
 │   └── hil/
 │       ├── HilTest.m              HIL 테스트 7개 (요구사항별 판정)
+│       ├── hil.sh                 Pi에서 돌리는 HIL 시나리오 (HilTest가 올려서 실행)
 │       ├── pi/                    Pi에서 돌리는 시나리오 스크립트 (.sh, 테스트 1개 = 스크립트 1개)
-│       ├── runPiScript.m          Pi에서 시나리오 스크립트 실행, "@이름 값" 줄을 구조체로
-│       ├── runOnPi.m              SSH로 Pi에서 명령 실행
 │       ├── DeployToPi.m           Process Advisor 태스크: Pi 빌드 · 배포
 │       ├── RunHilTests.m          Process Advisor 태스크: HIL 테스트 실행
 │       └── results/               HIL 측정 원본 (.mat, 검증 근거)
@@ -189,11 +188,12 @@ sign_detector/
 ```
  Raspberry Pi
    sign_detector.elf ──▶ can0 ═══ 선 ═══ can1 ──▶ candump -t a (수신 기록)
-   시나리오(tests/hil/pi/*.sh): CPU 부하, can0 down/up, 모델 파일 숨김, 인식 정지 파일
+   시나리오(tests/hil/hil.sh): CPU 부하, can0 down/up, 모델 파일 숨김, 인식 정지 파일
 ```
 
-- Pi에서 할 일은 `tests/hil/pi/`의 셸 스크립트에, 판정은 `HilTest.m`에 나눠 두었습니다. HilTest가 시작할 때 스크립트를 Pi의 `~/hil/`에 올리고, 테스트마다 스크립트 하나를 통째로 실행합니다(`runPiScript`). 스크립트는 판정에 쓸 시각 · 값을 `@이름 값` 줄로 찍습니다(예: `@canDown 1794208619.19`).
-- 스크립트는 Pi에서 직접 돌려 볼 수도 있습니다: `ssh pi` → `bash ~/hil/stall.sh` (이후 `/tmp/hil_can.log`에 can1 기록).
+- Pi에서 할 일은 `hil.sh`에, 판정은 `HilTest.m`에 나눠 두었습니다. HilTest가 시작할 때 `hil.sh`를 Pi의 `~/sign_detector_project/`에 올리고, 테스트마다 시나리오 하나를 통째로 실행합니다. 스크립트는 판정에 쓸 시각 · 값을 `@이름 값` 줄로(예: `@canDown 1794208619.19`), can1 기록은 candump 줄 그대로 출력합니다.
+- Pi에서 직접 돌려 볼 수도 있습니다: `bash ~/sign_detector_project/hil.sh stall`
+- 실행 파일은 Pi의 `~/MATLAB_ws` 아래에서 가장 최근에 빌드된 `sign_detector.elf`를 씁니다(= `DeployToPi`가 방금 배포한 것).
 
 - 시각은 모두 Pi 시계로 잽니다(`candump -t a`, `date +%s.%N`). 네트워크 지연이 섞이지 않습니다.
 - 처리 속도와 인식 정지는 `ncnn_infer.cpp`의 Pi 빌드 전용 기능을 씁니다: 5초마다 FPS 로그, `/tmp/stall_infer`가 있는 동안 결과 안 냄.
@@ -268,7 +268,6 @@ results = runtests('HilTest/bootStatus');         % 테스트 하나만
 - **발열**: 냉각 없이 4코어 부하 60 s면 86.7 °C, 클럭 1500 MHz, 처리 속도 18.8 → 16.8 FPS. 오래 운용하려면 쿨러가 필요합니다.
 - **입력 목록 직접 관리**: 모델이나 C++ 파일을 추가하면 `DeployToPi` 생성자의 입력 목록에도 넣어야 합니다.
 - **설정 제거 예정**: 참조 모델 강제 재빌드에 쓰는 `UpdateModelReferenceTargets`는 R2026b에서 제거 예정 경고가 납니다.
-- **프로젝트 열고 실행**: HIL의 Pi 실행 파일 경로(`hil_elf_path`)는 프로젝트 설정에서 계산합니다.
 - **Pi에서 다시 측정 필요**: 태스크 간 전달 방식, 결과가 있는 프레임만 확정에 사용, 카메라 정지 감지, HIL 빌드 전용 인식 정지 기능은 MIL 테스트와 코드 생성으로만 확인했습니다. 맨 위 HIL 결과 요약은 이 변경 전 측정값입니다.
 - **카메라 정지 감지의 한계**: 영상이 바이트 단위로 완전히 같은지로 판단합니다. 화면 전체가 포화되거나 완전히 검어서 연속한 영상이 똑같으면 카메라 정지로 봅니다. 요구사항 문서(SWR-32)에는 아직 적지 않았습니다.
 - **HIL 빌드와 일반 빌드**: `DeployToPi` 뒤에 Simulink에서 그냥 빌드하면 바뀐 게 없다고 보고 HIL 빌드(인식 정지 기능 포함)를 그대로 둡니다. 인식 정지 기능이 없는 실행 파일이 필요하면 참조 모델까지 강제로 다시 빌드해야 합니다.
