@@ -185,8 +185,9 @@ function f = readFrames(out, name)
     f.alive    = f.data(:, 3);   % byte 3 alive counter
     f.status   = f.data(:, 4);   % byte 4 상태 (0 준비 중, 1 정상)
 
-    % 측정 원본 남기기: tests/hil/results/<이름>_<시각>.mat
-    folder = fullfile(fileparts(mfilename('fullpath')), 'results');
+    % 측정 원본 남기기: cache/hil_results/<이름>_<시각>.mat (Git에 안 올림)
+    root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % tests/hil → 프로젝트 폴더
+    folder = fullfile(root, 'cache', 'hil_results');
     if ~isfolder(folder), mkdir(folder); end
     file = name + "_" + string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) + ".mat";
     save(fullfile(folder, file), 'f');

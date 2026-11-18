@@ -9,6 +9,9 @@
 # Simulink 캐시 · 코드 생성 폴더 (프로젝트 설정의 SimulinkCacheFolder / CodeGenFolder, 빌드하면 다시 생김)
 cache/sign_detector/
 
+# HIL 측정 원본 (HilTest가 테스트마다 .mat로 남김)
+cache/hil_results/
+
 # Windows용 NCNN 사전 빌드 라이브러리 (외부 배포물, README의 "준비" 참고)
 cache/ncnn_win/
 

@@ -133,13 +133,12 @@ sign_detector/
 │   └── hil/
 │       ├── HilTest.m              HIL 테스트 7개 (요구사항별 판정)
 │       ├── hil.sh                 Pi에서 돌리는 HIL 시나리오 (HilTest가 올려서 실행)
-│       ├── pi/                    Pi에서 돌리는 시나리오 스크립트 (.sh, 테스트 1개 = 스크립트 1개)
 │       ├── DeployToPi.m           Process Advisor 태스크: Pi 빌드 · 배포
-│       ├── RunHilTests.m          Process Advisor 태스크: HIL 테스트 실행
-│       └── results/               HIL 측정 원본 (.mat, 검증 근거)
+│       └── RunHilTests.m          Process Advisor 태스크: HIL 테스트 실행
 ├── cache/
 │   ├── best_ncnn_model/           학습된 YOLO26n NCNN 모델 (model.ncnn.param/.bin)   ← Git 포함
 │   ├── dataset/raw/               인식 테스트용 샘플 이미지                           ← Git 포함
+│   ├── hil_results/               HIL 측정 원본 (.mat, 테스트마다 생성)              ← Git 제외
 │   ├── ncnn_win/                  Windows용 NCNN 라이브러리 (직접 받기)               ← Git 제외
 │   └── sign_detector/             Simulink 캐시 · 코드 생성 · 빌드 결과 (자동 생성)    ← Git 제외
 ├── PA_Results/                  Process Advisor 결과 (자동 생성)                      ← Git 제외
@@ -248,7 +247,7 @@ processAdvisorWindow                              % 앱에서 Run All
 runprocess('GenerateJUnitForProcess', true);      % 또는 CI에서
 ```
 
-결과는 `PA_Results/`에 남습니다(HIL: `PA_Results/hil/`, 측정 원본: `tests/hil/results/`). Pi 없이 돌리려면 `processmodel.m`에서 `includeHilTasks = false`.
+결과는 `PA_Results/`에 남습니다(HIL: `PA_Results/hil/`, 측정 원본: `cache/hil_results/`). Pi 없이 돌리려면 `processmodel.m`에서 `includeHilTasks = false`.
 
 ### HIL만 따로
 
