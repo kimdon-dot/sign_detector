@@ -38,8 +38,9 @@ function processmodel(pm)
     excludePath = ".claude";
     findModels = padv.builtin.query.FindModels(Name="ModelsQuery", ExcludePath=excludePath);
     findSlModels = padv.builtin.query.FindArtifacts(ArtifactType="sl_model_file", ExcludePath=excludePath);
-    findModelsWithTests = padv.builtin.query.FindModelsWithTestCases(Parent=findModels);
-    findTestsForModel = padv.builtin.query.FindTestCasesForModel(Parent=findModels);
+    % 테스트 케이스는 모델 이름으로 이어져서, 부모를 걸러도 worktree의 테스트 파일이 같이 잡힘 → 여기도 뺌
+    findModelsWithTests = padv.builtin.query.FindModelsWithTestCases(Parent=findModels, ExcludePath=excludePath);
+    findTestsForModel = padv.builtin.query.FindTestCasesForModel(Parent=findModels, ExcludePath=excludePath);
 
     %% Register Tasks
 
