@@ -5,7 +5,7 @@
 ![MATLAB](https://img.shields.io/badge/MATLAB%20%2F%20Simulink-R2026b-orange)
 ![Target](https://img.shields.io/badge/Target-Raspberry%20Pi-c51a4a)
 ![Model](https://img.shields.io/badge/Detector-YOLO26n%20(NCNN)-blue)
-![Tests](https://img.shields.io/badge/Tests-MIL%2038%20%2B%20HIL%207-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-MIL%2039%20%2B%20HIL%207-brightgreen)
 
 - 30 / 60 / 90 / 120 km/h 표지판을 YOLO26n(NCNN)으로 인식하고, 최근 5프레임 다수결로 확정합니다.
 - 확정된 제한속도를 **0.1초마다** CAN(ID `0x100`)으로 보냅니다. 인식이 느려지거나 CAN이 고장 나도 주기는 지켜집니다.
@@ -30,7 +30,7 @@ Raspberry Pi에서 실제로 실행하고 CAN 송신을 기록해 측정한 값�
 
 ```mermaid
 flowchart LR
-    CAM["📷 Camera<br/>640x480"] -->|rgb| REC["unit_recognize<br/>YOLO26n (NCNN)<br/>신뢰도 0.5, 최고 1개"]
+    CAM["📷 Camera<br/>640x480"] -->|rgb| REC["unit_recognize<br/>YOLO26n (NCNN)<br/>신뢰도 0.5, 최고 1개<br/>화면 끝 박스 버림"]
     REC -->|"cls (ok일 때만)"| DEC["unit_decide<br/>5프레임 중 3개 이상이면 확정"]
     DEC -->|"limit, detected"| RT["Rate Transition<br/>0.05 s → 0.1 s"]
     REC -->|"ok → ready, last_t"| RT
@@ -50,7 +50,7 @@ flowchart LR
 
 | 모델 | 하는 일 | 요구사항 |
 |---|---|---|
-| `unit_recognize` | 영상 1프레임 → 표지판 클래스. NCNN C++ 추론(`pi/ncnn/ncnn_infer.cpp`, `coder.ceval`) + 후처리(신뢰도 0.5, 최고 1개) | SWR-01, 21 |
+| `unit_recognize` | 영상 1프레임 → 표지판 클래스. NCNN C++ 추론(`pi/ncnn/ncnn_infer.cpp`, `coder.ceval`) + 후처리(신뢰도 0.5, 최고 1개, 화면 끝에 닿은 박스는 버림) | SWR-01, 21 |
 | `unit_decide` | 최근 5프레임 중 같은 표지판이 3개 이상이면 확정하고, 다음 확정까지 유지 | SWR-02, 03, 22 |
 | `unit_can_sender` | CAN 메시지 구성, alive counter, 인식 정지 · 시작 대기 · CAN 고장 처리 | SWR-04, 11, 31~34 |
 | `sign_detector` | 최상위 모델. 위 세 모델을 참조하고 카메라 · 시계 · 태스크 주기를 연결 | 전체 |
@@ -81,6 +81,7 @@ flowchart LR
 | `INFER_PERIOD` | 0.05 s | 추론(카메라) 주기 |
 | `CAN_PERIOD` | 0.1 s | CAN 송신 주기 (SWR-04) |
 | `CONF_THRES` | 0.5 | 신뢰도 기준 (SWR-01) |
+| `EDGE_PAD` | 8 px | 화면 끝 여백: 신뢰도 1등 박스가 화면 가장자리에서 이 거리 안에 닿으면 표지판 없음으로 봄 (SWR-01) |
 | `VOTE_N`, `VOTE_K` | 5, 3 | 최근 N프레임 중 K개 이상이면 확정 (SWR-02) |
 | `STALL_SEC` | 1 s | 이 시간 동안 새 결과가 없으면 인식 정지 (SWR-32) |
 | `BOOT_SEC` | 10 s | 시작 후 이 시간 안에 첫 결과가 없으면 송신 중지 (SWR-34) |
@@ -156,7 +157,7 @@ sign_detector/
 
 | ID | 이름 | 요약 |
 |---|---|---|
-| SWR-01 | 인식 | 30/60/90/120 표지판을 실시간 인식. 신뢰도 0.5 이하는 버리고, 프레임당 최고 1개만 사용 |
+| SWR-01 | 인식 | 30/60/90/120 표지판을 실시간 인식. 신뢰도 0.5 이하는 버리고, 프레임당 최고 1개만 사용. 그 박스가 화면 끝 8픽셀 안에 닿으면(잘린 표지판) 표지판 없음 |
 | SWR-02 | 확정 | 최근 5프레임 중 같은 표지판 3개 이상이면 확정. 인식 정지 때 기록 초기화 |
 | SWR-03 | 제한속도 유지 | 다음 확정까지 유지. 시작 시 0(모름) |
 | SWR-04 | CAN 송신 | 0.1 s ±10 ms 주기. 추론 주기와 독립 |
@@ -178,7 +179,7 @@ sign_detector/
 | 단계 | 내용 | 도구 |
 |---|---|---|
 | 정적 검사 | Model Advisor(HISM 기반, `checks/model_standards.json`), 유지보수성 메트릭, 클론 탐지 | Simulink Check |
-| MIL 단위 | 모델별 베이스라인 테스트. 엑셀 시트 하나가 테스트 하나: unit_decide 25, unit_can_sender 7, unit_recognize 4 | Simulink Test |
+| MIL 단위 | 모델별 베이스라인 테스트. 엑셀 시트 하나가 테스트 하나: unit_decide 25, unit_can_sender 7, unit_recognize 5 | Simulink Test |
 | MIL 통합 | 최상위 모델로 사진 입력 → CAN 출력까지 2개 | Simulink Test |
 | 커버리지 · 테스트 메트릭 | 테스트 결과 병합, 요구사항 기반 테스트 메트릭 | Simulink Coverage, Simulink Check |
 | 코드 생성 | Embedded Coder (ERT, C++) | Embedded Coder |
@@ -207,7 +208,7 @@ sign_detector/
 
 | ID | 구현 위치 | MIL 테스트 | HIL 테스트 |
 |---|---|---|---|
-| SWR-01 | `unit_recognize/Subsystem` | 6 | – |
+| SWR-01 | `unit_recognize/Subsystem` | 7 | – |
 | SWR-02 | `unit_decide/Fcn`, `sign_detector/Decide_if_ok` | 18 | – |
 | SWR-03 | `unit_decide/Fcn` | 2 | – |
 | SWR-04 | `sign_detector/Rate Transition`, `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 5 | `normalOperation`, `periodUnderCpuLoad` |
@@ -219,7 +220,7 @@ sign_detector/
 | SWR-33 | `unit_can_sender/Fcn`, `CAN Tx/Pi CAN` | 1 | `canFailureKeepsRunning` |
 | SWR-34 | `sign_detector/Infer_status`, `unit_can_sender/Fcn` | 3 | `bootStatus`, `noModelStopsAfterBootTimeout` |
 
-실측값은 맨 위 [HIL 결과 요약](#hil-결과-요약)에 있습니다. MIL 테스트 수는 Verify 링크 수라 합계가 38보다 큽니다.<br/>
+실측값은 맨 위 [HIL 결과 요약](#hil-결과-요약)에 있습니다. MIL 테스트 수는 Verify 링크 수라 합계가 39보다 큽니다.<br/>
 ※ SWR-21은 Implement 링크가 아직 없습니다.
 
 ### HIL에서 찾아 고친 문제
