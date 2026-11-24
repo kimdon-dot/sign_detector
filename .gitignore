@@ -16,6 +16,9 @@ cache/hil_results/
 cache/ncnn_win/
 cache/ncnn_linux/
 
+# 학습 데이터 수집용 프레임 저장 기능 (cache/frame_save/README.txt, 일반 빌드에는 안 넣음)
+cache/frame_save/
+
 # Process Advisor 실행 결과 (리포트, 로그, JUnit)
 PA_Results/
 
